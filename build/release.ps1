@@ -12,7 +12,8 @@
   -Publish legt den Tag v<Version> an, pusht ihn und erstellt per gh-CLI das Release mit beiden Assets:
     WidgetTea-<ver>-setup.exe
     WidgetTea-<ver>-setup.exe.sha256
-  Der Gitea-Spiegel übernimmt Tag und Release beim nächsten Abgleich.
+  Ein Gitea-Spiegel des Repos übernimmt Code und Tags beim nächsten Abgleich,
+  die Release-Assets nicht – der Updater lädt immer von GitHub.
 
 .PARAMETER Repository
   Überschreibt <UpdateRepository> (z.B. für Tests gegen einen lokalen Server).
