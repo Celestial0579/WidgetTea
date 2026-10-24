@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>WidgetTea</AssemblyName>
+    <RootNamespace>WidgetTea</RootNamespace>
+    <ApplicationIcon>Assets\WidgetTea.ico</ApplicationIcon>
+
+    <Version>1.0.0</Version>
+    <Product>WidgetTea</Product>
+    <Authors>Tim Heyne</Authors>
+    <Company>Celestial0579</Company>
+    <Copyright>Copyright © 2026 Tim Heyne – MIT-Lizenz</Copyright>
+
+    <!-- GitHub- oder Gitea-Repository, dessen Releases der Updater abfragt (leer = Updater aus). -->
+    <UpdateRepository>https://github.com/Celestial0579/WidgetTea</UpdateRepository>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <AssemblyMetadata Include="UpdateRepository" Value="$(UpdateRepository)" />
+    <EmbeddedResource Include="Assets\WidgetTea.ico" LogicalName="WidgetTea.ico" />
+  </ItemGroup>
+
+</Project>

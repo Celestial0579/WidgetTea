@@ -1,0 +1,30 @@
+<Window x:Class="WidgetTea.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="WidgetTea"
+        WindowStyle="None" AllowsTransparency="True" Background="Transparent"
+        ShowInTaskbar="False" ResizeMode="NoResize" SizeToContent="WidthAndHeight"
+        FontFamily="Segoe UI" UseLayoutRounding="True" SnapsToDevicePixels="True"
+        MouseLeftButtonDown="OnMouseLeftButtonDown">
+    <Border Background="#F01F2023" CornerRadius="8" Padding="12,8,14,8"
+            BorderBrush="#22FFFFFF" BorderThickness="1">
+        <StackPanel>
+            <DockPanel LastChildFill="False" Margin="2,0,0,4">
+                <TextBlock x:Name="TitleText" DockPanel.Dock="Left" Foreground="#D4D4D4"
+                           FontSize="12" FontWeight="SemiBold" Text="Gitea"/>
+                <TextBlock x:Name="SummaryText" DockPanel.Dock="Right" Foreground="#8A8F98" FontSize="11"
+                           VerticalAlignment="Bottom"/>
+            </DockPanel>
+            <Canvas x:Name="HeatCanvas"/>
+            <DockPanel LastChildFill="False" Margin="2,6,0,0">
+                <StackPanel Orientation="Horizontal" DockPanel.Dock="Left">
+                    <Ellipse x:Name="StatusDot" Width="7" Height="7" Fill="#6E7681"
+                             VerticalAlignment="Center" Margin="0,0,6,0"/>
+                    <TextBlock x:Name="StatusText" Foreground="#8A8F98" FontSize="11"/>
+                </StackPanel>
+                <StackPanel x:Name="Legend" Orientation="Horizontal" DockPanel.Dock="Right"
+                            VerticalAlignment="Center"/>
+            </DockPanel>
+        </StackPanel>
+    </Border>
+</Window>
