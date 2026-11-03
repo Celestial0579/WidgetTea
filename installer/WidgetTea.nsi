@@ -38,6 +38,16 @@ RequestExecutionLevel user
 !define UNINSTKEY   "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}"
 !define SETTINGSKEY "Software\${APPNAME}"
 !define RUNKEY      "Software\Microsoft\Windows\CurrentVersion\Run"
+!define PRODUCT     "${APPNAME}"
+
+; Benötigte .NET-Laufzeit (WPF/WinForms → Desktop Runtime). Die Mindest-Patchversion enthält die
+; vorausgesetzten Sicherheitskorrekturen; bei neuen kritischen .NET-Patches anheben.
+!define DOTNET_FX       "Microsoft.WindowsDesktop.App"
+!define DOTNET_MAJOR    "10.0"
+!define DOTNET_MINPATCH 14
+!define DOTNET_NAME     ".NET Desktop Runtime"
+!define DOTNET_WINGET   "Microsoft.DotNet.DesktopRuntime.10"
+!define DOTNET_URL      "https://aka.ms/dotnet/10.0/windowsdesktop-runtime-win-x64.exe"
 
 Name "${APPNAME}"
 Caption "WidgetTea ${VERSION} – Installation"
@@ -60,6 +70,7 @@ VIAddVersionKey /LANG=1031 "LegalCopyright" "© 2026 Tim Heyne – MIT-Lizenz"
 !include x64.nsh
 !include FileFunc.nsh
 !include WinVer.nsh
+!include DotnetRuntime.nsh
 
 Var Restart
 
@@ -151,6 +162,13 @@ Function .onInit
   ${IfNot} ${Errors}
     StrCpy $Restart 1
   ${EndIf}
+
+  ; Beim Selbst-Update hat sich die App schon beendet: auch still nachfragen und bei Abbruch die alte Version wieder starten
+  StrCpy $DotnetAsk $Restart
+  ${If} $Restart == 1
+    GetFunctionAddress $DotnetAbortHook LaunchApp
+  ${EndIf}
+  Call DotnetEnsure
 FunctionEnd
 
 Function .onInstSuccess
@@ -165,6 +183,11 @@ Section "WidgetTea (erforderlich)" SecMain
   SectionIn RO
   SetShellVarContext current
   Call CloseRunningApp
+
+  ; Alte Dateien entfernen – frühere Versionen brachten die .NET-Laufzeit selbst mit
+  ${If} ${FileExists} "$INSTDIR\${EXENAME}"
+    RMDir /r "$INSTDIR"
+  ${EndIf}
 
   SetOutPath "$INSTDIR"
   File /r "${SRCDIR}\*.*"
@@ -199,7 +222,7 @@ Section "Mit Windows starten" SecAutostart
 SectionEnd
 
 !insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
-  !insertmacro MUI_DESCRIPTION_TEXT ${SecMain} "Das Widget inkl. .NET-Laufzeit."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SecMain} "Das Widget (benötigt die .NET Desktop Runtime ${DOTNET_MAJOR})."
   !insertmacro MUI_DESCRIPTION_TEXT ${SecAutostart} "Startet das Widget bei der Anmeldung (später im Einstellungsfenster änderbar)."
 !insertmacro MUI_FUNCTION_DESCRIPTION_END
 

@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Baut WidgetTea (self-contained, win-x64), erzeugt das NSIS-Setup samt SHA-256 und veröffentlicht es
+  Baut WidgetTea (framework-dependent, win-x64; der Installer prüft die .NET Desktop Runtime), erzeugt das NSIS-Setup samt SHA-256 und veröffentlicht es
   optional als GitHub-Release.
 
 .DESCRIPTION
@@ -48,7 +48,7 @@ if (Test-Path $out) { Remove-Item -Recurse -Force $out }
 Write-Host "== WidgetTea $version" -ForegroundColor Cyan
 Write-Host "   Update-Quelle: $(if ($Repository) { $Repository } else { '(keine – Updater aus)' })"
 
-dotnet publish $csproj -c Release -r win-x64 --self-contained true `
+dotnet publish $csproj -c Release -r win-x64 --self-contained false `
     -p:UpdateRepository=$Repository -p:DebugType=none -o $publishDir
 if ($LASTEXITCODE) { throw "dotnet publish fehlgeschlagen" }
 

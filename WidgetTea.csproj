@@ -11,7 +11,7 @@
     <RootNamespace>WidgetTea</RootNamespace>
     <ApplicationIcon>Assets\WidgetTea.ico</ApplicationIcon>
 
-    <Version>1.0.0</Version>
+    <Version>1.1.0</Version>
     <Product>WidgetTea</Product>
     <Authors>Tim Heyne</Authors>
     <Company>Celestial0579</Company>

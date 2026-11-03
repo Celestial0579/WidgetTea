@@ -13,7 +13,10 @@ Desktop-Widget für Windows, das die eigene Contribution-Heatmap aus einem [Gite
 ## Installation
 
 `WidgetTea-<version>-setup.exe` aus den [Releases](https://github.com/Celestial0579/WidgetTea/releases/latest) laden und ausführen.
-Installiert wird nur für das eigene Benutzerkonto (`%LOCALAPPDATA%\Programs\WidgetTea`), ohne Adminrechte; die .NET-Laufzeit ist enthalten.
+Installiert wird nur für das eigene Benutzerkonto (`%LOCALAPPDATA%\Programs\WidgetTea`), ohne Adminrechte.
+Voraussetzung ist die [.NET Desktop Runtime 10](https://dotnet.microsoft.com/download/dotnet/10.0) (x64, mindestens 10.0.14). Fehlt sie oder ist sie veraltet,
+fragt das Setup – auch bei einem Selbst-Update – vor der Installation nach und installiert sie per `winget` (Adminrechte nötig).
+Sicherheitsupdates der Laufzeit kommen danach über Windows Update.
 
 Beim ersten Start öffnet sich das Einstellungsfenster:
 
