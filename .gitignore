@@ -3,3 +3,7 @@ obj/
 artifacts/
 .vs/
 *.user
+
+# Lokale Claude-Code-Dateien (Freigaben, ggf. mit Geheimnissen)
+.claude/settings.local.json
+CLAUDE.local.md
