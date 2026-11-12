@@ -100,13 +100,14 @@ Function DotnetEnsure
     Call DotnetAbort
 
   install:
-    ; winget ist auf aktuellen Windows-Versionen vorhanden; die UAC-Abfrage stellt das Laufzeit-Setup selbst
+    ; winget ist auf aktuellen Windows-Versionen vorhanden; die UAC-Abfrage stellt das Laufzeit-Setup selbst.
+    ; --architecture x64: Auf einem ARM64-Windows nähme winget sonst die ARM64-Laufzeit, gesucht wird hier aber x64.
     nsExec::ExecToStack 'cmd.exe /C where winget'
     Pop $1
     Pop $0
     ${If} $1 == 0
       Banner::show /NOUNLOAD /set 76 "${DOTNET_NAME} wird installiert …" "Bitte die Windows-Abfrage bestätigen."
-      nsExec::ExecToStack 'cmd.exe /C winget install --id ${DOTNET_WINGET} --exact --source winget --silent --accept-package-agreements --accept-source-agreements --disable-interactivity'
+      nsExec::ExecToStack 'cmd.exe /C winget install --id ${DOTNET_WINGET} --exact --source winget --architecture x64 --silent --accept-package-agreements --accept-source-agreements --disable-interactivity'
       Pop $1
       Pop $0
       Banner::destroy
