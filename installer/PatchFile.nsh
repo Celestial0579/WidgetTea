@@ -55,14 +55,12 @@ Function PatchFile
             StrCpy $R8 1
             ${ExitDo}
           ${EndIf}
-        ${Else}
-          ; Fehlgriff: Passt dieses Byte auf den Anfang des Musters, zählt es schon als erstes Zeichen.
-          StrCpy $R7 $R1 1
-          ${If} $R6 S== $R7
-            StrCpy $R5 1
-          ${Else}
-            StrCpy $R5 0
-          ${EndIf}
+        ${ElseIf} $R5 > 0
+          ; Fehlgriff nach $R5 passenden Zeichen: Der Treffer kann mitten im Fehlgriff beginnen. Deshalb zurück
+          ; auf das Byte hinter dessen Anfang und dort neu ansetzen, statt einfach weiterzulesen.
+          IntOp $R7 0 - $R5
+          FileSeek $R3 $R7 CUR
+          StrCpy $R5 0
         ${EndIf}
       ${Loop}
       FileClose $R3
