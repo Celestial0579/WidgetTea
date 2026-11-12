@@ -65,7 +65,7 @@ New-Item -ItemType Directory -Force $work, $logs | Out-Null
 # ---------------------------------------------------------------- Hilfen
 
 # Fenster eines Prozesses finden, lesen und beantworten. Das Setup zeigt seine Nachfragen als gewöhnliche
-# Windows-Meldungsfenster (Klasse #32770); WM_COMMAND mit der Kennung des Knopfes schließt sie.
+# Windows-Meldungsfenster (Klasse #32770); WM_COMMAND für den passenden Knopf schließt sie.
 Add-Type -TypeDefinition @'
 using System;
 using System.Collections.Generic;
@@ -81,6 +81,7 @@ public static class WtDialogs
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetClassName(IntPtr hWnd, StringBuilder s, int n);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetWindowText(IntPtr hWnd, StringBuilder s, int n);
     [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr hWnd);
+    [DllImport("user32.dll")] private static extern int GetDlgCtrlID(IntPtr hWnd);
     [DllImport("user32.dll")] private static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr w, IntPtr l);
 
     public static long[] Find(int pid)
@@ -117,15 +118,32 @@ public static class WtDialogs
         return sb.ToString();
     }
 
-    public static void Press(long hWnd, int buttonId)
+    // Drückt den Knopf mit einer der Beschriftungen. Über die Beschriftung und nicht über eine feste Kennung:
+    // In einem Fenster, das nur „OK“ hat, trägt der Knopf nicht IDOK, und WM_COMMAND mit IDOK verpufft.
+    public static bool PressButton(long hWnd, string[] captions)
     {
-        PostMessage(new IntPtr(hWnd), 0x0111 /* WM_COMMAND */, new IntPtr(buttonId), IntPtr.Zero);
+        IntPtr dialog = new IntPtr(hWnd);
+        IntPtr button = IntPtr.Zero;
+        EnumChildWindows(dialog, (h, l) =>
+        {
+            var cls = new StringBuilder(64);
+            GetClassName(h, cls, cls.Capacity);
+            if (cls.ToString() != "Button") return true;
+            var text = new StringBuilder(256);
+            GetWindowText(h, text, text.Capacity);
+            string label = text.ToString().Replace("&", "");
+            foreach (var caption in captions)
+            {
+                if (string.Equals(label, caption, StringComparison.OrdinalIgnoreCase)) { button = h; return false; }
+            }
+            return true;
+        }, IntPtr.Zero);
+        if (button == IntPtr.Zero) return false;
+        PostMessage(dialog, 0x0111 /* WM_COMMAND */, new IntPtr(GetDlgCtrlID(button)), button);
+        return true;
     }
 }
 '@
-
-$IDOK = 1
-$IDNO = 7
 
 $script:stage = ''
 function Step([string]$text) { $script:stage = $text; Write-Host "`n== $text" -ForegroundColor Cyan }
@@ -158,16 +176,21 @@ function Invoke-Setup {
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     while (-not $p.WaitForExit(250)) {
         foreach ($h in [WtDialogs]::Find($p.Id)) {
-            if ($done.ContainsKey($h)) { continue }
             $text = [WtDialogs]::Text($h)
+            $id = "$h|$text"   # Fensterkennungen werden wiederverwendet, der Text gehört deshalb dazu
+            if ($done.ContainsKey($id)) { continue }
             $key = $Answers.Keys | Where-Object { $text -like "*$_*" } | Select-Object -First 1
             if (-not $key) {
                 Stop-Process -Id $p.Id -Force
                 throw "[$script:stage] Unerwartete Nachfrage des Setups: $text"
             }
-            Write-Host "   ?   $($text.Substring(0, [Math]::Min(150, $text.Length)).Replace("`r`n", ' ')) …  →  Knopf $($Answers[$key])"
-            [WtDialogs]::Press($h, $Answers[$key])
-            $done[$h] = $true
+            $captions = [string[]]$Answers[$key]
+            Write-Host "   ?   $($text.Substring(0, [Math]::Min(150, $text.Length)).Replace("`r`n", ' ')) …  →  Knopf „$($captions[0])“"
+            if (-not [WtDialogs]::PressButton($h, $captions)) {
+                Stop-Process -Id $p.Id -Force
+                throw "[$script:stage] Kein Knopf „$($captions -join '“/„')“ in der Nachfrage: $text"
+            }
+            $done[$id] = $true
             $seen.Add($key)
         }
         if ((Get-Date) -gt $deadline) {
@@ -230,9 +253,10 @@ function Write-Settings([string]$text) {
     [System.IO.File]::WriteAllText($settingsFile, $text, [System.Text.UTF8Encoding]::new($false))
 }
 
+# Text im Fenster → Beschriftung des Knopfes (englisches oder deutsches Windows).
 $declineAnswers = [ordered]@{
-    'Jetzt installieren?'                = $IDNO   # Nachfrage aus DotnetRuntime.nsh
-    'bleibt in der bisherigen Version'   = $IDOK   # Bescheid aus UpdateDeclined
+    'Jetzt installieren?'              = @('No', 'Nein')   # Nachfrage aus DotnetRuntime.nsh
+    'bleibt in der bisherigen Version' = @('OK')           # Bescheid aus UpdateDeclined
 }
 
 # ---------------------------------------------------------------- 0 Vorbereitung
