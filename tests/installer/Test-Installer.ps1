@@ -185,10 +185,11 @@ function Invoke-Setup {
                 throw "[$script:stage] Unerwartete Nachfrage des Setups: $text"
             }
             $captions = [string[]]$Answers[$key]
-            Write-Host "   ?   $($text.Substring(0, [Math]::Min(150, $text.Length)).Replace("`r`n", ' ')) …  →  Knopf „$($captions[0])“"
+            # Keine typografischen Anführungszeichen in doppelt begrenzten Zeichenketten: PowerShell liest sie als Begrenzer.
+            Write-Host "   ?   $($text.Substring(0, [Math]::Min(150, $text.Length)).Replace("`r`n", ' ')) ...  ->  Knopf $($captions[0])"
             if (-not [WtDialogs]::PressButton($h, $captions)) {
                 Stop-Process -Id $p.Id -Force
-                throw "[$script:stage] Kein Knopf „$($captions -join '“/„')“ in der Nachfrage: $text"
+                throw "[$script:stage] Kein Knopf $($captions -join ' / ') in der Nachfrage: $text"
             }
             $done[$id] = $true
             $seen.Add($key)
