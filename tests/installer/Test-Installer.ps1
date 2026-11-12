@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Prüft das Setup still und ohne Zuschauer: Neuinstallation, Update von 1.0.0, Abbruch ohne passende
   .NET-Laufzeit und das abgelehnte Selbst-Update.

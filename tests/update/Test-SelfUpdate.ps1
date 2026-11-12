@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Prüft das Selbst-Update so, wie die App es auslöst: Sie fragt ihre Update-Quelle, lädt das Setup, prüft die
   Prüfsumme, startet es mit /S /RESTART und beendet sich.

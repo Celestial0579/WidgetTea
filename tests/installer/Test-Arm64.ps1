@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Prüft auf einem ARM64-Windows, was dort anders ist: Das Setup sucht die x64-Laufzeit an ihrem eigenen Ort,
   winget muss ausdrücklich die x64-Fassung holen, und die App läuft in der x64-Emulation.
