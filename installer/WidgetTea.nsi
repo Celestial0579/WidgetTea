@@ -144,6 +144,31 @@ Function LaunchApp
   Exec '"$WINDIR\explorer.exe" "$INSTDIR\${EXENAME}"'
 FunctionEnd
 
+; Entfernt die .NET-Laufzeit, die Version 1.0.x selbst mitbrachte. Sie muss weg: Solange hostfxr.dll und
+; coreclr.dll neben der EXE liegen, nimmt der Starter sie statt der installierten Laufzeit.
+; Gelöscht wird gezielt und nicht der ganze Ordner. Wer WidgetTea in einen Ordner mit eigenen Dateien
+; installiert hat, behält sie (bis auf DLLs im Hauptordner – die lassen sich von denen der Laufzeit
+; nicht unterscheiden).
+Function RemoveBundledRuntime
+  Delete "$INSTDIR\*.dll"
+  Delete "$INSTDIR\createdump.exe"
+  Delete "$INSTDIR\${EXENAME}"
+  Delete "$INSTDIR\${APPNAME}.deps.json"
+  Delete "$INSTDIR\${APPNAME}.runtimeconfig.json"
+  ; Sprachordner der Laufzeit (cs, de, … zh-Hant): nur die *.resources.dll, den Ordner nur, wenn er danach leer ist.
+  FindFirst $R0 $R1 "$INSTDIR\*.*"
+  ${DoWhile} $R1 != ""
+    ${If} $R1 != "."
+    ${AndIf} $R1 != ".."
+    ${AndIf} ${FileExists} "$INSTDIR\$R1\*.resources.dll"
+      Delete "$INSTDIR\$R1\*.resources.dll"
+      RMDir "$INSTDIR\$R1"
+    ${EndIf}
+    FindNext $R0 $R1
+  ${Loop}
+  FindClose $R0
+FunctionEnd
+
 Function .onInit
   ${IfNot} ${AtLeastWin10}
     MessageBox MB_OK|MB_ICONSTOP "WidgetTea benötigt Windows 10 oder neuer." /SD IDOK
@@ -184,9 +209,9 @@ Section "WidgetTea (erforderlich)" SecMain
   SetShellVarContext current
   Call CloseRunningApp
 
-  ; Alte Dateien entfernen – frühere Versionen brachten die .NET-Laufzeit selbst mit
-  ${If} ${FileExists} "$INSTDIR\${EXENAME}"
-    RMDir /r "$INSTDIR"
+  ; Frühere Versionen brachten die .NET-Laufzeit selbst mit – erkennbar an coreclr.dll neben der EXE.
+  ${If} ${FileExists} "$INSTDIR\coreclr.dll"
+    Call RemoveBundledRuntime
   ${EndIf}
 
   SetOutPath "$INSTDIR"
