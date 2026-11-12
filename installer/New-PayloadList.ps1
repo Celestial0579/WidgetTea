@@ -18,10 +18,20 @@
 
 .PARAMETER Out
   Die zu schreibende Datei mit den NSIS-Befehlen.
+
+.PARAMETER Manifest
+  Wahlweise: dieselbe Liste als schlichter Text, ein Pfad je Zeile, Ordner mit "\" am Ende und die tiefsten
+  zuerst. Das Setup legt sie in den Installationsordner. Ein spaeteres Setup liest sie dort und entfernt, was
+  die alte Fassung mitgebracht hat - so bleibt nichts liegen, wenn eine Datei wegfaellt.
+
+.PARAMETER Also
+  Weitere Dateien fuer die Liste in -Manifest, die das Setup ausserhalb von "File /r" installiert.
 #>
 param(
     [Parameter(Mandatory = $true)][string]$Source,
-    [Parameter(Mandatory = $true)][string]$Out
+    [Parameter(Mandatory = $true)][string]$Out,
+    [string]$Manifest,
+    [string[]]$Also = @()
 )
 
 $ErrorActionPreference = 'Stop'
@@ -47,3 +57,22 @@ Get-ChildItem -LiteralPath $root -Recurse -Directory | Sort-Object { $_.FullName
 if ($lines.Count -eq 0) { throw "Keine Dateien in $root - SRCDIR stimmt nicht." }
 
 [System.IO.File]::WriteAllLines($Out, $lines, (New-Object System.Text.UTF8Encoding $false))
+
+if ($Manifest) {
+    $entries = New-Object System.Collections.Generic.List[string]
+    Get-ChildItem -LiteralPath $root -Recurse -File | Sort-Object FullName | ForEach-Object {
+        $entries.Add($_.FullName.Substring($root.Length + 1))
+    }
+    foreach ($a in $Also) { $entries.Add($a) }
+    Get-ChildItem -LiteralPath $root -Recurse -Directory | Sort-Object { $_.FullName.Length } -Descending | ForEach-Object {
+        $entries.Add($_.FullName.Substring($root.Length + 1) + '\')
+    }
+    # Das Setup liest die Liste spaeter als schlichten ASCII-Text und befolgt nur schlichte Pfade unterhalb des
+    # Installationsordners. Was nicht dazu passt, soll hier auffallen und nicht erst als liegen gebliebene Datei.
+    foreach ($e in $entries) {
+        if ($e -match '[^\x20-\x7E]' -or $e -match '\.\.|[:*?/]') {
+            throw "Der Pfad '$e' passt nicht in die Dateiliste: nur ASCII, kein '..' und keines der Zeichen : * ? /"
+        }
+    }
+    [System.IO.File]::WriteAllLines($Manifest, $entries, [System.Text.Encoding]::ASCII)
+}

@@ -29,6 +29,8 @@
    11  Das Setup erkennt die laufende App an ihr selbst und nicht am Programmnamen: Ein fremdes Programm, das nur
        so heißt, läuft weiter; ein WidgetTea aus einem anderen Ordner wird beendet; lässt sich die App nicht
        beenden, gibt das Setup auf; die Deinstallation beendet die laufende App.
+   12  Dateien, die in einer neuen Fassung wegfallen, verschwinden beim Update; fremde Dateien bleiben, und eine
+       Dateiliste, die aus dem Installationsordner hinausweist, wird nicht befolgt.
 
   Für 3, 4, 6 und 8 wird das Setup ein zweites Mal gebaut, mit einer Mindestversion der Laufzeit, die es nicht
   gibt (/DDOTNET_MINPATCH=999), und mit kurzem Zeitablauf der Nachfrage. So lässt sich „Laufzeit fehlt“ auf
@@ -336,8 +338,25 @@ Check ($r.ExitCode -eq 0) "Exitcode 0 (war $($r.ExitCode))"
 Check (Test-Path (Join-Path $dir 'coreclr.dll')) "$oldVersion bringt die .NET-Laufzeit selbst mit"
 Write-Host "       $((Get-ChildItem $dir -Recurse -File).Count) Dateien, $((Get-ChildItem $dir -Directory).Count) Unterordner"
 
+# Beim Update entfernt das Setup genau die Dateien von $oldVersion (installer\Bundled-1.0.0.nsh). Die Liste dort muss
+# deshalb mit dem übereinstimmen, was das veröffentlichte Setup wirklich installiert. Die tatsächliche Liste liegt
+# bei den Protokollen des Laufs, Ordner mit „\" am Ende.
+$oldFiles = @(Get-ChildItem -LiteralPath $dir -Recurse -File | ForEach-Object { $_.FullName.Substring($dir.Length + 1) })
+$oldDirs = @(Get-ChildItem -LiteralPath $dir -Recurse -Directory | ForEach-Object { $_.FullName.Substring($dir.Length + 1) })
+Set-Content -LiteralPath (Join-Path $logs "dateien-$oldVersion.txt") -Encoding ascii -Value (@($oldFiles | Sort-Object) + @($oldDirs | Sort-Object | ForEach-Object { "$_\" }))
+$bundled = Get-Content -LiteralPath (Join-Path $root 'installer\Bundled-1.0.0.nsh')
+$listedFiles = @($bundled | ForEach-Object { if ($_ -match '^Delete "\$INSTDIR\\(.+)"$') { $Matches[1] } })
+$listedDirs = @($bundled | ForEach-Object { if ($_ -match '^RMDir "\$INSTDIR\\(.+)"$') { $Matches[1] } })
+$diff = @(Compare-Object -ReferenceObject $oldFiles -DifferenceObject $listedFiles | ForEach-Object { "$($_.SideIndicator) $($_.InputObject)" })
+Check ($diff.Count -eq 0) "Die hinterlegte Liste nennt genau die $($oldFiles.Count) Dateien von $oldVersion (Abweichung: $(($diff | Select-Object -First 5) -join ', '))"
+$diff = @(Compare-Object -ReferenceObject $oldDirs -DifferenceObject $listedDirs | ForEach-Object { "$($_.SideIndicator) $($_.InputObject)" })
+Check ($diff.Count -eq 0) "und genau die $($oldDirs.Count) Unterordner (Abweichung: $(($diff | Select-Object -First 5) -join ', '))"
+
 # Fremde Dateien: Wer in einen Ordner mit eigenen Dingen installiert hat, darf sie beim Update nicht verlieren.
+# Auch keine eigenen DLLs, weder im Hauptordner noch in einem Ordner, der so heißt wie ein Sprachordner der Laufzeit.
 Set-Content -LiteralPath (Join-Path $dir 'meine-notizen.txt') -Value 'gehört nicht zu WidgetTea' -Encoding utf8
+Set-Content -LiteralPath (Join-Path $dir 'eigene-bibliothek.dll') -Value 'auch eine DLL kann fremd sein' -Encoding utf8
+Set-Content -LiteralPath (Join-Path $dir 'de\fremd.resources.dll') -Value 'und eine im Sprachordner' -Encoding utf8
 New-Item -ItemType Directory -Force (Join-Path $dir 'eigener-ordner') | Out-Null
 Set-Content -LiteralPath (Join-Path $dir 'eigener-ordner\daten.txt') -Value 'auch nicht' -Encoding utf8
 
@@ -408,14 +427,17 @@ foreach ($f in 'coreclr.dll', 'hostfxr.dll', 'hostpolicy.dll', 'clrjit.dll', 'cr
     Check (-not (Test-Path (Join-Path $dir $f))) "$f ist weg"
 }
 # Nichts darf liegen bleiben: Im Hauptordner steht genau das, was das neue Setup mitbringt, plus die fremde Datei.
-$expectedFiles = @(@(Get-ChildItem -LiteralPath $publishDir -File | ForEach-Object Name) + 'LICENSE.txt', 'uninstall.exe', 'meine-notizen.txt' | Sort-Object)
+$expectedFiles = @(@(Get-ChildItem -LiteralPath $publishDir -File | ForEach-Object Name) + 'LICENSE.txt', 'uninstall.exe', 'install-manifest.txt', 'meine-notizen.txt', 'eigene-bibliothek.dll' | Sort-Object)
 $actualFiles = @(Get-ChildItem -LiteralPath $dir -File | ForEach-Object Name | Sort-Object)
 Write-Host "       Hauptordner: $($actualFiles -join ', ')"
 $unexpected = @(Compare-Object -ReferenceObject $expectedFiles -DifferenceObject $actualFiles | ForEach-Object { "$($_.SideIndicator) $($_.InputObject)" })
-Check ($unexpected.Count -eq 0) "Im Hauptordner liegt genau das neue Programm und die fremde Datei (Abweichung: $($unexpected -join ', '))"
-$subdirs = @(Get-ChildItem -LiteralPath $dir -Directory | ForEach-Object Name)
-Check ($subdirs.Count -eq 1 -and $subdirs[0] -eq 'eigener-ordner') "Die Sprachordner der Laufzeit sind weg (übrig: $($subdirs -join ', '))"
+Check ($unexpected.Count -eq 0) "Im Hauptordner liegt genau das neue Programm, seine Dateiliste und die fremden Dateien (Abweichung: $($unexpected -join ', '))"
+$subdirs = @(Get-ChildItem -LiteralPath $dir -Directory | ForEach-Object Name | Sort-Object)
+Check (($subdirs -join '|') -eq 'de|eigener-ordner') "Die Sprachordner der Laufzeit sind weg, bis auf den mit der fremden Datei (übrig: $($subdirs -join ', '))"
+$inDe = @(Get-ChildItem -LiteralPath (Join-Path $dir 'de') -File | ForEach-Object Name)
+Check (($inDe -join '|') -eq 'fremd.resources.dll') "Dort liegt nur noch die fremde Datei (übrig: $($inDe -join ', '))"
 Check (Test-Path (Join-Path $dir 'meine-notizen.txt')) 'Die fremde Datei im Hauptordner ist noch da'
+Check (Test-Path (Join-Path $dir 'eigene-bibliothek.dll')) 'Die fremde DLL im Hauptordner ist noch da'
 Check (Test-SameSnapshot $foreignBefore (Get-Snapshot (Join-Path $dir 'eigener-ordner'))) 'Der fremde Unterordner ist unverändert'
 Check ((Get-Item (Join-Path $dir 'WidgetTea.exe')).VersionInfo.ProductVersion -like "$version*") "Installiert ist Version $version"
 Check ((Read-Settings) -ceq $settingsOriginal) 'Die Einstellungen sind wieder genau wie vorher, automatische Updates an'
@@ -489,7 +511,8 @@ $deadline = (Get-Date).AddSeconds(60)
 while ((Test-Path (Join-Path $dir 'uninstall.exe')) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 500 }
 $left = @(Get-ChildItem -LiteralPath $dir -Recurse -File | ForEach-Object { $_.FullName.Substring($dir.Length + 1) } | Sort-Object)
 Write-Host "       Übrig: $($left -join ', ')"
-Check (($left -join '|') -ceq 'eigener-ordner\daten.txt|meine-notizen.txt') 'Im Ordner liegen nur noch die fremden Dateien'
+$foreign = @('de\fremd.resources.dll', 'eigene-bibliothek.dll', 'eigener-ordner\daten.txt', 'meine-notizen.txt')
+Check (-not (Compare-Object -ReferenceObject $foreign -DifferenceObject $left)) 'Im Ordner liegen nur noch die fremden Dateien'
 Check (Test-SameSnapshot $foreignBefore (Get-Snapshot (Join-Path $dir 'eigener-ordner'))) 'Der fremde Unterordner ist unverändert'
 Check (-not (Test-Path $regKey)) 'Die Registry-Einträge sind weg'
 Check (-not (Get-ItemProperty -Path $runKey -Name 'WidgetTea' -ErrorAction SilentlyContinue)) 'Der Autostart ist weg'
@@ -736,5 +759,60 @@ finally {
         if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
     }
 }
+
+# ---------------------------------------------------------------- 12 Wegfallende Dateien
+
+Step '12 Dateien, die in der neuen Fassung wegfallen, verschwinden beim Update'
+# Als „frühere Fassung" dient dasselbe Programm mit drei Dateien mehr. Das gebaute Setup kennt sie nicht; es
+# erfährt von ihnen nur aus der Dateiliste, die das frühere Setup im Installationsordner hinterlassen hat.
+$earlierPayload = Join-Path $work 'programm-frueher'
+Copy-Item -LiteralPath $publishDir -Destination $earlierPayload -Recurse
+Set-Content -LiteralPath (Join-Path $earlierPayload 'alte-bibliothek.dll') -Value 'fällt später weg' -Encoding utf8
+New-Item -ItemType Directory -Force (Join-Path $earlierPayload 'alt'), (Join-Path $earlierPayload 'alt-leer') | Out-Null
+Set-Content -LiteralPath (Join-Path $earlierPayload 'alt\daten.bin') -Value 'auch' -Encoding utf8
+Set-Content -LiteralPath (Join-Path $earlierPayload 'alt-leer\rest.bin') -Value 'auch' -Encoding utf8
+$setupEarlier = Join-Path $work 'WidgetTea-frueher-setup.exe'
+& $makensis /V2 /INPUTCHARSET UTF8 "/DVERSION=$version" "/DSRCDIR=$earlierPayload" "/DOUTFILE=$setupEarlier" (Join-Path $root 'installer\WidgetTea.nsi')
+if ($LASTEXITCODE) { throw 'makensis (frühere Fassung) fehlgeschlagen' }
+
+$target = Join-Path $work 'wegfall'
+$manifest = Join-Path $target 'install-manifest.txt'
+$r = Invoke-Setup $setupEarlier @('/S', "/D=$target")
+Check ($r.ExitCode -eq 0) "Exitcode 0 (war $($r.ExitCode))"
+$listed = @(Get-Content -LiteralPath $manifest)
+Write-Host "       Dateiliste der früheren Fassung: $($listed -join ', ')"
+foreach ($entry in 'WidgetTea.exe', 'alte-bibliothek.dll', 'alt\daten.bin', 'alt-leer\rest.bin', 'LICENSE.txt', 'alt\', 'alt-leer\') {
+    Check ($listed -contains $entry) "Die Liste nennt $entry"
+}
+# Fremdes dazu: eine DLL im Hauptordner und eine Datei in einem Ordner, den die frühere Fassung angelegt hat.
+Set-Content -LiteralPath (Join-Path $target 'meine.dll') -Value 'fremd' -Encoding utf8
+Set-Content -LiteralPath (Join-Path $target 'alt\meins.txt') -Value 'fremd' -Encoding utf8
+
+$r = Invoke-Setup $setup @('/S', "/D=$target")
+Check ($r.ExitCode -eq 0) "Exitcode 0 (war $($r.ExitCode))"
+Check (-not (Test-Path (Join-Path $target 'alte-bibliothek.dll'))) 'Die weggefallene Datei im Hauptordner ist weg'
+Check (-not (Test-Path (Join-Path $target 'alt\daten.bin'))) 'Die weggefallene Datei im Unterordner ist weg'
+Check (-not (Test-Path (Join-Path $target 'alt-leer'))) 'Der Ordner, der danach leer war, ist weg'
+Check (Test-Path (Join-Path $target 'alt\meins.txt')) 'Die fremde Datei im Unterordner ist noch da, der Ordner also auch'
+Check (Test-Path (Join-Path $target 'meine.dll')) 'Die fremde DLL im Hauptordner ist noch da'
+Check ((Get-Item (Join-Path $target 'WidgetTea.exe')).VersionInfo.ProductVersion -like "$version*") 'Das Programm ist vollständig installiert'
+$listed = @(Get-Content -LiteralPath $manifest)
+Check (-not ($listed -contains 'alte-bibliothek.dll')) 'Die neue Dateiliste nennt die weggefallene Datei nicht mehr'
+
+# Eine Liste, die aus dem Ordner hinausweist oder mehr als eine Datei meint, wird an diesen Stellen nicht befolgt.
+$outside = Join-Path $work 'draussen.txt'
+Set-Content -LiteralPath $outside -Value 'liegt außerhalb' -Encoding utf8
+Add-Content -LiteralPath $manifest -Encoding ascii -Value '..\draussen.txt', $outside, '*.dll', '\draussen.txt', 'alt\..\..\draussen.txt'
+$r = Invoke-Setup $setup @('/S', "/D=$target")
+Check ($r.ExitCode -eq 0) "Exitcode 0 (war $($r.ExitCode))"
+Check (Test-Path -LiteralPath $outside) 'Die Datei außerhalb des Installationsordners ist noch da'
+Check (Test-Path (Join-Path $target 'meine.dll')) 'Der Platzhalter *.dll hat die fremde DLL nicht getroffen'
+
+Start-Process -FilePath (Join-Path $target 'uninstall.exe') -ArgumentList '/S' -Wait
+Wait-Gone (Join-Path $target 'uninstall.exe')
+$left = @(Get-ChildItem -LiteralPath $target -Recurse -File | ForEach-Object { $_.FullName.Substring($target.Length + 1) })
+Write-Host "       Übrig: $($left -join ', ')"
+Check (-not (Compare-Object -ReferenceObject @('alt\meins.txt', 'meine.dll') -DifferenceObject $left)) 'Nach der Deinstallation liegen dort nur noch die fremden Dateien'
+Check (-not (Test-Path $regKey)) 'Die Registry-Einträge sind weg'
 
 Write-Host "`nAlle Installer-Prüfungen bestanden." -ForegroundColor Green

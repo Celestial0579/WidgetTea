@@ -38,8 +38,13 @@ RequestExecutionLevel user
 
 ; Was das Setup installiert, als Delete-Befehle für die Deinstallation: beim Übersetzen aus SRCDIR erzeugt.
 ; So entfernt die Deinstallation genau die installierten Dateien, auch wenn im Programm später eine dazukommt.
+; Dieselbe Liste kommt als Textdatei mit in den Installationsordner (MANIFESTNAME). Ein späteres Setup liest dort,
+; was die bisherige Fassung installiert hat, und entfernt es vor dem Kopieren – so bleibt nichts liegen, wenn in
+; einer neuen Fassung eine Datei wegfällt.
 !tempfile PAYLOADLIST
-!system 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "${__FILEDIR__}\New-PayloadList.ps1" -Source "${SRCDIR}" -Out "${PAYLOADLIST}"' = 0
+!tempfile MANIFESTFILE
+!system 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "${__FILEDIR__}\New-PayloadList.ps1" -Source "${SRCDIR}" -Out "${PAYLOADLIST}" -Manifest "${MANIFESTFILE}" -Also LICENSE.txt' = 0
+!define MANIFESTNAME "install-manifest.txt"
 
 !define APPNAME     "WidgetTea"
 !define DISPLAYNAME "WidgetTea – Gitea-Contributions auf dem Desktop"
@@ -315,29 +320,104 @@ Function UpdateDeclined
   MessageBox MB_OK|MB_ICONINFORMATION|MB_TOPMOST "$R4$R5$\r$\n$\r$\n$R6"
 FunctionEnd
 
-; Entfernt die .NET-Laufzeit, die Version 1.0.x selbst mitbrachte. Sie muss weg: Solange hostfxr.dll und
-; coreclr.dll neben der EXE liegen, nimmt der Starter sie statt der installierten Laufzeit.
-; Gelöscht wird gezielt und nicht der ganze Ordner. Wer WidgetTea in einen Ordner mit eigenen Dateien
-; installiert hat, behält sie (bis auf DLLs im Hauptordner – die lassen sich von denen der Laufzeit
-; nicht unterscheiden).
+; Entfernt, was Version 1.0.0 installiert hat, samt der .NET-Laufzeit, die sie selbst mitbrachte. Die muss weg:
+; Solange hostfxr.dll und coreclr.dll neben der EXE liegen, nimmt der Starter sie statt der installierten Laufzeit.
+; 1.0.0 war die einzige Fassung mit eigener Laufzeit, ihre Dateien stehen fest (Bundled-1.0.0.nsh). Entfernt
+; werden genau sie und nichts sonst: Wer WidgetTea in einen Ordner mit eigenen Dateien installiert hat, behält
+; sie, auch eigene DLLs.
 Function RemoveBundledRuntime
-  Delete "$INSTDIR\*.dll"
-  Delete "$INSTDIR\createdump.exe"
-  Delete "$INSTDIR\${EXENAME}"
-  Delete "$INSTDIR\${APPNAME}.deps.json"
-  Delete "$INSTDIR\${APPNAME}.runtimeconfig.json"
-  ; Sprachordner der Laufzeit (cs, de, … zh-Hant): nur die *.resources.dll, den Ordner nur, wenn er danach leer ist.
-  FindFirst $R0 $R1 "$INSTDIR\*.*"
-  ${DoWhile} $R1 != ""
-    ${If} $R1 != "."
-    ${AndIf} $R1 != ".."
-    ${AndIf} ${FileExists} "$INSTDIR\$R1\*.resources.dll"
-      Delete "$INSTDIR\$R1\*.resources.dll"
-      RMDir "$INSTDIR\$R1"
+  !include "Bundled-1.0.0.nsh"
+FunctionEnd
+
+; Push <Pfad>  Call IsPlainRelativePath  Pop <1|0>
+; 1 nur für einen schlichten Pfad unterhalb des Installationsordners: nicht leer, kein Laufwerk, kein
+; Schrägstrich, kein „..“ und kein Platzhalter. Die Dateiliste liegt in einem Ordner, in den der Nutzer schreiben
+; darf. Was dort steht, darf das Setup weder aus dem Ordner hinausführen noch mehr treffen als eine Datei.
+Function IsPlainRelativePath
+  Exch $R1
+  Push $R2
+  Push $R3
+  Push $R4
+  Push $R5
+  StrCpy $R3 1
+  StrLen $R5 $R1
+  ${If} $R5 == 0
+    StrCpy $R3 0
+  ${EndIf}
+  StrCpy $R2 $R1 1
+  ${If} $R2 == "\"
+    StrCpy $R3 0
+  ${EndIf}
+  StrCpy $R4 0
+  ${DoWhile} $R4 < $R5
+    StrCpy $R2 $R1 1 $R4
+    ${If} $R2 == ":"
+    ${OrIf} $R2 == "/"
+    ${OrIf} $R2 == "*"
+    ${OrIf} $R2 == "?"
+      StrCpy $R3 0
     ${EndIf}
-    FindNext $R0 $R1
+    StrCpy $R2 $R1 2 $R4
+    ${If} $R2 == ".."
+      StrCpy $R3 0
+    ${EndIf}
+    IntOp $R4 $R4 + 1
   ${Loop}
-  FindClose $R0
+  StrCpy $R1 $R3
+  Pop $R5
+  Pop $R4
+  Pop $R3
+  Pop $R2
+  Exch $R1
+FunctionEnd
+
+; Entfernt, was die bisher installierte Fassung mitgebracht hat, laut ihrer Liste im Installationsordner.
+; Was die neue Fassung weiter enthält, schreibt das Setup gleich danach wieder hin; was weggefallen ist, bleibt
+; weg. Fremde Dateien stehen in keiner Liste und bleiben liegen. Ein Ordner verschwindet nur, wenn er leer ist.
+; Fassungen vor dieser hatten keine Liste, dann geschieht hier nichts.
+Function RemovePreviousPayload
+  ${IfNot} ${FileExists} "$INSTDIR\${MANIFESTNAME}"
+    Return
+  ${EndIf}
+  ClearErrors
+  FileOpen $R0 "$INSTDIR\${MANIFESTNAME}" r
+  ${If} ${Errors}
+    Return
+  ${EndIf}
+  ${Do}
+    ClearErrors
+    FileRead $R0 $R1
+    ${If} ${Errors}
+      ${ExitDo}
+    ${EndIf}
+    ${Do}                           ; Zeilenende abschneiden
+      StrCpy $R2 $R1 1 -1
+      ${If} $R2 == "$\r"
+      ${OrIf} $R2 == "$\n"
+        StrCpy $R1 $R1 -1
+      ${Else}
+        ${ExitDo}
+      ${EndIf}
+    ${Loop}
+    StrCpy $R2 $R1 1 -1
+    ${If} $R2 == "\"                ; Ordner stehen mit „\“ am Ende in der Liste
+      StrCpy $R1 $R1 -1
+      Push $R1
+      Call IsPlainRelativePath
+      Pop $R2
+      ${If} $R2 == 1
+        RMDir "$INSTDIR\$R1"
+      ${EndIf}
+    ${Else}
+      Push $R1
+      Call IsPlainRelativePath
+      Pop $R2
+      ${If} $R2 == 1
+        Delete "$INSTDIR\$R1"
+      ${EndIf}
+    ${EndIf}
+  ${Loop}
+  FileClose $R0
 FunctionEnd
 
 Function .onInit
@@ -390,10 +470,13 @@ Section "WidgetTea (erforderlich)" SecMain
   ${If} ${FileExists} "$INSTDIR\coreclr.dll"
     Call RemoveBundledRuntime
   ${EndIf}
+  ; Was die bisherige Fassung installiert hat und die neue nicht mehr enthält, soll nicht liegen bleiben.
+  Call RemovePreviousPayload
 
   SetOutPath "$INSTDIR"
   File /r "${SRCDIR}\*.*"
   File "/oname=LICENSE.txt" "..\LICENSE"
+  File "/oname=${MANIFESTNAME}" "${MANIFESTFILE}"
   WriteUninstaller "$INSTDIR\uninstall.exe"
 
   CreateShortcut "$SMPROGRAMS\WidgetTea.lnk" "$INSTDIR\${EXENAME}" "" "$INSTDIR\${EXENAME}" 0 SW_SHOWNORMAL "" "Gitea-Contributions auf dem Desktop"
@@ -444,6 +527,7 @@ Section "un.WidgetTea" SecUnMain
   ; gehört nicht WidgetTea und bleibt. Der Ordner selbst verschwindet nur, wenn er danach leer ist.
   !include "${PAYLOADLIST}"
   Delete "$INSTDIR\LICENSE.txt"
+  Delete "$INSTDIR\${MANIFESTNAME}"
   Delete "$INSTDIR\uninstall.exe"
   RMDir "$INSTDIR"
 
@@ -463,3 +547,4 @@ SectionEnd
 !insertmacro MUI_UNFUNCTION_DESCRIPTION_END
 
 !delfile "${PAYLOADLIST}"
+!delfile "${MANIFESTFILE}"
