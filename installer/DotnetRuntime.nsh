@@ -9,7 +9,11 @@
 ;   DOTNET_WINGET    winget-Paket, z.B. Microsoft.DotNet.DesktopRuntime.10
 ;   DOTNET_URL       Direktdownload, z.B. https://aka.ms/dotnet/10.0/windowsdesktop-runtime-win-x64.exe
 ;   PRODUCT          Name der Anwendung für die Meldungen
-; Benötigt LogicLib.nsh und x64.nsh.
+;   DOTNET_CAPTION   Fenstertitel der Nachfragen im stillen Modus, üblicherweise der des Setups
+; Wahlweise:
+;   DOTNET_ASK_TIMEOUT    Sekunden, die „Jetzt installieren?“ im stillen Modus auf eine Antwort wartet (Vorgabe 120)
+;   DOTNET_RETRY_TIMEOUT  dasselbe für „Wiederholen/Abbrechen“ nach dem Download im Browser (Vorgabe 1800)
+; Benötigt LogicLib.nsh, x64.nsh und das System-Plugin.
 ;
 ; Aufruf in .onInit:
 ;   StrCpy $DotnetAsk 1   ; 1 = auch bei /S nachfragen (z.B. Selbst-Update mit angemeldetem Benutzer)
@@ -17,10 +21,23 @@
 ;                         ; vorher wird $DotnetAbortHook aufgerufen, falls gesetzt (GetFunctionAddress)
 ;
 ; Unbeaufsichtigt (/S ohne $DotnetAsk) wird nicht gefragt: Abbruch mit Exitcode 3.
+;
+; Mit /S und $DotnetAsk warten die Nachfragen nicht ewig: Beim Selbst-Update hat sich die Anwendung schon beendet,
+; und sitzt niemand am Rechner, bliebe sie sonst geschlossen. Ohne Antwort wird abgebrochen wie bei „Nein“;
+; $DotnetTimedOut ist dann 1, damit $DotnetAbortHook es dem Nutzer sagen kann.
+
+!ifndef DOTNET_ASK_TIMEOUT
+  !define DOTNET_ASK_TIMEOUT 120
+!endif
+!ifndef DOTNET_RETRY_TIMEOUT
+  !define DOTNET_RETRY_TIMEOUT 1800
+!endif
+!define /math DOTNET_RETRY_MINUTES ${DOTNET_RETRY_TIMEOUT} / 60
 
 Var DotnetAsk
 Var DotnetFound
 Var DotnetAbortHook
+Var DotnetTimedOut
 
 ; $DotnetFound = höchste installierte Version ${DOTNET_MAJOR}.x (leer, wenn keine); $R9 = deren Patchnummer oder -1
 Function DotnetFind
@@ -73,6 +90,31 @@ Function DotnetAbort
   Quit
 FunctionEnd
 
+; Meldungsfenster mit Zeitablauf.
+;   Push <Text>  Push <MB_-Flags als Zahl>  Push <Sekunden>  Call DotnetTimedBox  Pop <Antwort>
+; Antwort: 6 Ja, 7 Nein, 4 Wiederholen, 2 Abbrechen, 32000 Zeitablauf – oder "error", wenn Windows die Funktion
+; nicht kennt. NSIS selbst kann kein Fenster mit Zeitablauf. MessageBoxTimeoutW ist von Microsoft nicht
+; dokumentiert, steckt aber seit Windows XP hinter MessageBox selbst; für den Fall der Fälle fragen die Aufrufer
+; bei "error" ohne Zeitablauf, wie vorher.
+Function DotnetTimedBox
+  ; Stack beim Aufruf (oben zuerst): Sekunden, Flags, Text
+  Exch $2         ; $2 = Sekunden
+  Exch
+  Exch $1         ; $1 = Flags
+  Exch 2
+  Exch $0         ; $0 = Text            Stack jetzt: altes $0, altes $2, altes $1
+  Push $3
+  IntOp $2 $2 * 1000
+  StrCpy $3 "${DOTNET_CAPTION}"
+  System::Call 'user32::MessageBoxTimeoutW(p 0, w r0, w r3, i r1, i 0, i r2) i .r0'
+  Pop $3
+  Exch $0         ; Antwort auf den Stack, $0 wiederhergestellt
+  Exch
+  Pop $2
+  Exch
+  Pop $1
+FunctionEnd
+
 Function DotnetEnsure
   Push $0
   Push $1
@@ -94,9 +136,25 @@ Function DotnetEnsure
     ${Else}
       StrCpy $0 "installiert ist $DotnetFound – diese Version ist veraltet und enthält bekannte Sicherheitslücken"
     ${EndIf}
-    MessageBox MB_YESNO|MB_ICONEXCLAMATION|MB_TOPMOST \
-      "${PRODUCT} benötigt die ${DOTNET_NAME} ${DOTNET_MAJOR}.${DOTNET_MINPATCH} oder neuer (x64).$\r$\n($0)$\r$\n$\r$\nJetzt installieren? Dafür sind Administratorrechte nötig.$\r$\n$\r$\nBei „Nein“ wird die Installation von ${PRODUCT} abgebrochen." \
-      IDYES install
+    StrCpy $1 "${PRODUCT} benötigt die ${DOTNET_NAME} ${DOTNET_MAJOR}.${DOTNET_MINPATCH} oder neuer (x64).$\r$\n($0)$\r$\n$\r$\nJetzt installieren? Dafür sind Administratorrechte nötig.$\r$\n$\r$\nBei „Nein“ wird die Installation von ${PRODUCT} abgebrochen."
+    ${If} ${Silent}
+      ; Stiller Aufruf mit Nachfrage (Selbst-Update): Die Anwendung hat sich schon beendet, und vielleicht sitzt
+      ; niemand am Rechner. Ohne Antwort geht es nach DOTNET_ASK_TIMEOUT Sekunden weiter wie bei „Nein“.
+      Push "$1$\r$\n$\r$\nOhne Antwort geschieht das nach ${DOTNET_ASK_TIMEOUT} Sekunden von selbst."
+      Push 0x00050034              ; MB_YESNO | MB_ICONEXCLAMATION | MB_SETFOREGROUND | MB_TOPMOST
+      Push ${DOTNET_ASK_TIMEOUT}
+      Call DotnetTimedBox
+      Pop $0
+      ${If} $0 == 6                ; Ja
+        Goto install
+      ${ElseIf} $0 == 32000        ; Zeitablauf
+        StrCpy $DotnetTimedOut 1
+      ${ElseIf} $0 == "error"      ; Windows kennt die Funktion nicht: fragen wie bisher, ohne Zeitablauf
+        MessageBox MB_YESNO|MB_ICONEXCLAMATION|MB_TOPMOST "$1" IDYES install
+      ${EndIf}
+    ${Else}
+      MessageBox MB_YESNO|MB_ICONEXCLAMATION|MB_TOPMOST "$1" IDYES install
+    ${EndIf}
     Call DotnetAbort
 
   install:
@@ -119,8 +177,23 @@ Function DotnetEnsure
 
     ; Ersatzweise: offizielles Setup im Browser laden lassen und auf den Benutzer warten
     ExecShell "open" "${DOTNET_URL}"
-    MessageBox MB_RETRYCANCEL|MB_ICONINFORMATION|MB_TOPMOST \
-      "Das Setup der ${DOTNET_NAME} wird von Microsoft heruntergeladen.$\r$\nBitte ausführen und danach auf „Wiederholen“ klicken." \
-      IDRETRY check
+    StrCpy $1 "Das Setup der ${DOTNET_NAME} wird von Microsoft heruntergeladen.$\r$\nBitte ausführen und danach auf „Wiederholen“ klicken."
+    ${If} ${Silent}
+      ; Auch hier nicht ewig warten – aber lange genug, um die Laufzeit in Ruhe zu laden und zu installieren.
+      Push "$1$\r$\n$\r$\nOhne Antwort wird die Installation von ${PRODUCT} nach ${DOTNET_RETRY_MINUTES} Minuten abgebrochen."
+      Push 0x00050045              ; MB_RETRYCANCEL | MB_ICONINFORMATION | MB_SETFOREGROUND | MB_TOPMOST
+      Push ${DOTNET_RETRY_TIMEOUT}
+      Call DotnetTimedBox
+      Pop $0
+      ${If} $0 == 4                ; Wiederholen
+        Goto check
+      ${ElseIf} $0 == 32000        ; Zeitablauf
+        StrCpy $DotnetTimedOut 1
+      ${ElseIf} $0 == "error"
+        MessageBox MB_RETRYCANCEL|MB_ICONINFORMATION|MB_TOPMOST "$1" IDRETRY check
+      ${EndIf}
+    ${Else}
+      MessageBox MB_RETRYCANCEL|MB_ICONINFORMATION|MB_TOPMOST "$1" IDRETRY check
+    ${EndIf}
     Call DotnetAbort
 FunctionEnd

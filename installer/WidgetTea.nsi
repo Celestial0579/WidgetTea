@@ -74,9 +74,12 @@ RequestExecutionLevel user
 !define DOTNET_NAME     ".NET Desktop Runtime"
 !define DOTNET_WINGET   "Microsoft.DotNet.DesktopRuntime.10"
 !define DOTNET_URL      "https://aka.ms/dotnet/10.0/windowsdesktop-runtime-win-x64.exe"
+; Nachfragen mit Zeitablauf tragen denselben Fenstertitel wie die übrigen Meldungen des Setups.
+!define SETUPCAPTION    "WidgetTea ${VERSION} – Installation"
+!define DOTNET_CAPTION  "${SETUPCAPTION}"
 
 Name "${APPNAME}"
-Caption "WidgetTea ${VERSION} – Installation"
+Caption "${SETUPCAPTION}"
 UninstallCaption "WidgetTea – Deinstallation"
 OutFile "${OUTFILE}"
 BrandingText "${APPNAME} ${VERSION}"
@@ -227,21 +230,29 @@ FunctionEnd
 ; Das Selbst-Update wurde abgebrochen, weil die .NET-Laufzeit fehlt und nicht installiert wurde.
 ; Die alte Version sucht eine Minute nach jedem Start nach Updates, lädt dieses Setup erneut und beendet
 ; sich dafür – ohne Eingriff also endlos im Minutentakt. Deshalb: automatische Updates ausschalten,
-; Bescheid sagen, alte Version wieder starten. Das Update lässt sich über das Tray-Symbol nachholen.
+; alte Version wieder starten, Bescheid sagen. Das Update lässt sich über das Tray-Symbol nachholen.
+; Dasselbe geschieht, wenn auf die Nachfrage niemand antwortet ($DotnetTimedOut, siehe DotnetRuntime.nsh).
 Function UpdateDeclined
   ; /RESTART ohne vorhandene Installation (von Hand aufgerufen): nichts auszuschalten und nichts zu starten.
   ${IfNot} ${FileExists} "$INSTDIR\${EXENAME}"
     Return
   ${EndIf}
   Call PauseAutoUpdate
-  ${If} $R3 == 1
-    MessageBox MB_OK|MB_ICONINFORMATION|MB_TOPMOST \
-      "${APPNAME} bleibt in der bisherigen Version installiert und startet jetzt wieder.$\r$\n$\r$\nDamit diese Abfrage nicht nach jedem Start erneut kommt, wurde „Updates automatisch installieren“ ausgeschaltet. Sobald die ${DOTNET_NAME} installiert ist, lässt sich das Update über das Tray-Symbol nachholen – danach sind automatische Updates wieder an."
-  ${Else}
-    MessageBox MB_OK|MB_ICONINFORMATION|MB_TOPMOST \
-      "${APPNAME} bleibt in der bisherigen Version installiert und startet jetzt wieder.$\r$\n$\r$\nIst „Updates automatisch installieren“ eingeschaltet, kommt diese Abfrage nach jedem Start erneut. In den Einstellungen lässt sich das ausschalten."
-  ${EndIf}
+  ; Erst starten, dann Bescheid sagen: Sitzt niemand am Rechner, läuft das Widget trotzdem wieder,
+  ; und der Hinweis wartet, bis ihn jemand liest.
   Call LaunchApp
+  ${If} $DotnetTimedOut == 1
+    StrCpy $R4 "Auf die Nachfrage kam keine Antwort.$\r$\n$\r$\n"
+  ${Else}
+    StrCpy $R4 ""
+  ${EndIf}
+  StrCpy $R5 "${APPNAME} bleibt in der bisherigen Version installiert und läuft wieder."
+  ${If} $R3 == 1
+    StrCpy $R6 "Damit diese Abfrage nicht nach jedem Start erneut kommt, wurde „Updates automatisch installieren“ ausgeschaltet. Sobald die ${DOTNET_NAME} installiert ist, lässt sich das Update über das Tray-Symbol nachholen – danach sind automatische Updates wieder an."
+  ${Else}
+    StrCpy $R6 "Ist „Updates automatisch installieren“ eingeschaltet, kommt diese Abfrage nach jedem Start erneut. In den Einstellungen lässt sich das ausschalten."
+  ${EndIf}
+  MessageBox MB_OK|MB_ICONINFORMATION|MB_TOPMOST "$R4$R5$\r$\n$\r$\n$R6"
 FunctionEnd
 
 ; Entfernt die .NET-Laufzeit, die Version 1.0.x selbst mitbrachte. Sie muss weg: Solange hostfxr.dll und
