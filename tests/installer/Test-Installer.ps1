@@ -26,6 +26,9 @@
     9  Deinstallation mit fremden Dateien im Ordner: Weg ist nur, was das Setup installiert hat.
    10  Fremde Programme neben dem Setup, die wie Hilfsprogramme von Windows heißen (cmd.exe, taskkill.exe, …),
        werden nicht ausgeführt. Als Gegenprobe startet das veröffentlichte 1.0.0 sie noch.
+   11  Das Setup erkennt die laufende App an ihr selbst und nicht am Programmnamen: Ein fremdes Programm, das nur
+       so heißt, läuft weiter; ein WidgetTea aus einem anderen Ordner wird beendet; lässt sich die App nicht
+       beenden, gibt das Setup auf; die Deinstallation beendet die laufende App.
 
   Für 3, 4, 6 und 8 wird das Setup ein zweites Mal gebaut, mit einer Mindestversion der Laufzeit, die es nicht
   gibt (/DDOTNET_MINPATCH=999), und mit kurzem Zeitablauf der Nachfrage. So lässt sich „Laufzeit fehlt“ auf
@@ -643,6 +646,95 @@ if (Test-Path -LiteralPath (Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\w
     Check ($probe -match '^0\|v?\d+\.\d+.*\|unten$') "winget ist vorhanden und antwortet über den festen Pfad: $probe"
 } else {
     Check ($probe -match '^error\|\|unten$') "winget fehlt auf diesem Rechner, und nsExec meldet das als error: $probe"
+}
+
+# ---------------------------------------------------------------- 11 Laufende App gezielt erkennen
+
+Step '11 Das Setup erkennt die laufende App an ihr selbst, nicht am Programmnamen'
+# Zwei Stellvertreter: Der Schläfer aus Stufe 10 heißt nur WidgetTea.exe. Der Halter hält zusätzlich den Mutex,
+# mit dem die App eine zweite Instanz verhindert, und gilt dem Setup deshalb als laufendes WidgetTea.
+$holderExe = Join-Path $work 'halter.exe'
+Set-Content -LiteralPath (Join-Path $work 'halter.cs') -Encoding ascii -Value @'
+public static class Halter
+{
+    public static void Main()
+    {
+        bool created;
+        using (new System.Threading.Mutex(true, @"Local\WidgetTea.SingleInstance", out created))
+        {
+            System.Threading.Thread.Sleep(600000);
+        }
+    }
+}
+'@
+& $csc /nologo "/out:$holderExe" (Join-Path $work 'halter.cs') | Out-Null
+if ($LASTEXITCODE) { throw 'Der Halter ließ sich nicht übersetzen' }
+
+# Testfassung des Setups, die nichts beendet: An ihr zeigt sich, dass das Setup aufgibt.
+$setupNoKill = Join-Path $work 'WidgetTea-beendet-nichts-setup.exe'
+& $makensis /V2 /INPUTCHARSET UTF8 "/DVERSION=$version" "/DSRCDIR=$publishDir" "/DOUTFILE=$setupNoKill" `
+    '/DCLOSE_APP_NO_KILL=1' (Join-Path $root 'installer\WidgetTea.nsi')
+if ($LASTEXITCODE) { throw 'makensis (Testfassung ohne Beenden) fehlgeschlagen' }
+
+# Startet einen Stellvertreter unter dem Namen WidgetTea.exe aus dem angegebenen Ordner.
+function Start-StandIn([string]$Program, [string]$Folder) {
+    New-Item -ItemType Directory -Force $Folder | Out-Null
+    Copy-Item -LiteralPath $Program -Destination (Join-Path $Folder 'WidgetTea.exe') -Force
+    $p = Start-Process -FilePath (Join-Path $Folder 'WidgetTea.exe') -PassThru -WindowStyle Hidden
+    $null = $p.Handle
+    Start-Sleep -Seconds 1
+    if ($p.HasExited) { throw "[$script:stage] Der Stellvertreter in $Folder hat sich sofort beendet" }
+    $p
+}
+
+$target = Join-Path $work 'gezielt'
+$standIns = [System.Collections.Generic.List[System.Diagnostics.Process]]::new()
+try {
+    # a) Ein fremdes Programm gleichen Namens in einem anderen Ordner geht das Setup nichts an.
+    $stranger = Start-StandIn $sleeperExe (Join-Path $work 'fremdes-programm')
+    $standIns.Add($stranger)
+    $r = Invoke-Setup $setup @('/S', "/D=$target") -TimeoutSec 120
+    Check ($r.ExitCode -eq 0) "Exitcode 0 (war $($r.ExitCode))"
+    Check ((Get-Item (Join-Path $target 'WidgetTea.exe')).VersionInfo.ProductVersion -like "$version*") 'Die Installation ist vollständig'
+    Check (-not $stranger.HasExited) 'Das fremde Programm gleichen Namens läuft weiter'
+    Stop-Process -Id $stranger.Id -Force
+
+    # b) Ein WidgetTea aus einem anderen Ordner (zweite Installation) hält den Mutex der App und wird beendet.
+    $second = Start-StandIn $holderExe (Join-Path $work 'zweite-installation')
+    $standIns.Add($second)
+    $r = Invoke-Setup $setup @('/S', "/D=$target") -TimeoutSec 120
+    Check ($r.ExitCode -eq 0) "Exitcode 0 (war $($r.ExitCode))"
+    Check ($second.WaitForExit(5000)) 'Das laufende WidgetTea aus dem anderen Ordner wurde beendet'
+
+    # c) Lässt sich die App nicht beenden, gibt das Setup auf, statt endlos zu wiederholen.
+    $blocker = Start-StandIn $sleeperExe $target
+    $standIns.Add($blocker)
+    $before = Get-Snapshot $target
+    $watch = [System.Diagnostics.Stopwatch]::StartNew()
+    $r = Invoke-Setup $setupNoKill @('/S', "/D=$target") -TimeoutSec 120
+    $watch.Stop()
+    Check ($r.ExitCode -eq 2) "Exitcode 2, abgebrochen (war $($r.ExitCode))"
+    Write-Host "       aufgegeben nach $([int]$watch.Elapsed.TotalSeconds) s"
+    Check (-not $blocker.HasExited) 'Das Programm im Zielordner läuft noch'
+    Check (Test-SameSnapshot $before (Get-Snapshot $target)) 'Am Installationsordner hat sich nichts geändert'
+    Stop-Process -Id $blocker.Id -Force
+    $blocker.WaitForExit(5000) | Out-Null
+
+    # d) Die Deinstallation beendet die laufende App und räumt auf.
+    $r = Invoke-Setup $setup @('/S', "/D=$target") -TimeoutSec 120
+    Check ($r.ExitCode -eq 0) "Exitcode 0 (war $($r.ExitCode))"
+    $running = Start-StandIn $holderExe $target
+    $standIns.Add($running)
+    Start-Process -FilePath (Join-Path $target 'uninstall.exe') -ArgumentList '/S' -Wait
+    Wait-Gone $target
+    Check ($running.WaitForExit(5000)) 'Die Deinstallation hat die laufende App beendet'
+    Check (-not (Test-Path $target)) 'Die Deinstallation entfernt den Ordner'
+    Check (-not (Test-Path $regKey)) 'Die Registry-Einträge sind weg'
+}
+finally {
+    foreach ($p in $standIns) {
+        if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+    }
 }
 
 Write-Host "`nAlle Installer-Prüfungen bestanden." -ForegroundColor Green

@@ -136,35 +136,92 @@ Var Restart
 
 ; ---------- Hilfsfunktionen ----------
 
-; Wartet, bis WidgetTea beendet ist (Dateien wären sonst gesperrt).
+; Läuft WidgetTea? $R7 = 1, wenn ja.
+; Gefragt wird nicht nach dem Programmnamen: Den trägt auch das WidgetTea eines anderen angemeldeten Benutzers
+; und jedes fremde Programm, das zufällig so heißt.
+;   1. Der Mutex, mit dem die App eine zweite Instanz verhindert (App.xaml.cs). Er gilt je Sitzung.
+;   2. Die EXE im Installationsordner: Solange ein Programm läuft, lässt sich seine Datei nicht zum Schreiben
+;      öffnen. Das erfasst auch eine Instanz in einer anderen Sitzung desselben Benutzers.
+!define APPMUTEX "Local\WidgetTea.SingleInstance"
+!macro APP_RUNNING_FUNC un
+Function ${un}IsAppRunning
+  Push $R6
+  StrCpy $R7 0
+  System::Call 'kernel32::OpenMutexW(i 0x00100000, i 0, w "${APPMUTEX}") p .R6'   ; 0x00100000 = SYNCHRONIZE
+  ${If} $R6 != 0
+    System::Call 'kernel32::CloseHandle(p R6)'
+    StrCpy $R7 1
+  ${ElseIf} ${FileExists} "$INSTDIR\${EXENAME}"
+    ClearErrors
+    FileOpen $R6 "$INSTDIR\${EXENAME}" a
+    ${If} ${Errors}
+      StrCpy $R7 1
+    ${Else}
+      FileClose $R6
+    ${EndIf}
+  ${EndIf}
+  Pop $R6
+FunctionEnd
+!macroend
+!insertmacro APP_RUNNING_FUNC ""
+!insertmacro APP_RUNNING_FUNC "un."
+
+; Sorgt dafür, dass WidgetTea nicht mehr läuft (Dateien wären sonst gesperrt).
 ; Beim Update (/RESTART) beendet sich die App gerade selbst → bis zu 15 s still warten.
-; Bei einer normalen Installation wird das laufende Widget nach Rückfrage beendet.
+; Sonst wird das laufende Widget nach Rückfrage beendet, und zwar nur Prozesse des angemeldeten Benutzers.
+; Gelingt das nach ${CLOSE_APP_TRIES} Versuchen nicht, gibt das Setup auf, statt endlos zu wiederholen.
+; Hilfsprogramme von Windows immer mit vollem Pfad aus dem Systemordner: Beim bloßen Namen sucht Windows zuerst
+; im Ordner des Setups und im aktuellen Ordner, und dort kann ein fremdes Programm gleichen Namens liegen.
+;
+; /DCLOSE_APP_NO_KILL ist nur für die Installer-Prüfungen da: Das Setup beendet dann nichts, und es lässt sich
+; prüfen, dass es aufgibt.
+!define CLOSE_APP_TRIES 5
 !macro CLOSE_APP_FUNC un WOFUER
 Function ${un}CloseRunningApp
-  StrCpy $R8 0
-  ; Hilfsprogramme von Windows immer mit vollem Pfad aus dem Systemordner. Beim bloßen Namen sucht Windows zuerst
-  ; im Ordner des Setups und im aktuellen Ordner, und dort kann ein fremdes Programm gleichen Namens liegen.
-  ; Zur Schreibweise: cmd /C entfernt das erste und das letzte Anführungszeichen des Befehls, der Rest bleibt.
+  StrCpy $R8 0          ; Runden stillen Wartens beim Selbst-Update
+  StrCpy $R9 0          ; Versuche, die App zu beenden
+  System::Call 'advapi32::GetUserNameW(w .R5, *i ${NSIS_MAX_STRLEN}) i .R4'
   retry:
-    nsExec::ExecToStack '"$SYSDIR\cmd.exe" /C ""$SYSDIR\tasklist.exe" /FI "IMAGENAME eq ${EXENAME}" /NH | "$SYSDIR\find.exe" /I "${EXENAME}""'
-    Pop $0
-    Pop $1
-    ${If} $0 == 0
+    Call ${un}IsAppRunning
+    ${If} $R7 == 1
       ${If} $Restart == 1
       ${AndIf} $R8 < 30
         IntOp $R8 $R8 + 1
         Sleep 500
         Goto retry
       ${EndIf}
-      MessageBox MB_OKCANCEL|MB_ICONEXCLAMATION \
-        "WidgetTea läuft gerade und wird für die ${WOFUER} beendet." \
-        /SD IDOK IDOK kill
-      Abort
+      ${If} $R9 == 0
+        MessageBox MB_OKCANCEL|MB_ICONEXCLAMATION \
+          "WidgetTea läuft gerade und wird für die ${WOFUER} beendet." \
+          /SD IDOK IDOK kill
+        Abort
+      ${EndIf}
+      ${If} $R9 >= ${CLOSE_APP_TRIES}
+        MessageBox MB_RETRYCANCEL|MB_ICONSTOP \
+          "WidgetTea ließ sich nicht beenden.$\r$\n$\r$\nBitte über das Tray-Symbol beenden und dann „Wiederholen“ wählen." \
+          /SD IDCANCEL IDRETRY again
+        Abort
+        again:
+          StrCpy $R9 1
+          Goto retry
+      ${EndIf}
       kill:
-        nsExec::ExecToStack '"$SYSDIR\taskkill.exe" /IM "${EXENAME}"'
+        IntOp $R9 $R9 + 1
+        !ifndef CLOSE_APP_NO_KILL
+          nsExec::ExecToStack '"$SYSDIR\taskkill.exe" /FI "USERNAME eq $R5" /IM "${EXENAME}"'
+          Pop $0
+          Pop $0
+        !endif
         Sleep 1500
-        nsExec::ExecToStack '"$SYSDIR\taskkill.exe" /F /IM "${EXENAME}"'
-        Sleep 500
+        Call ${un}IsAppRunning
+        ${If} $R7 == 1
+          !ifndef CLOSE_APP_NO_KILL
+            nsExec::ExecToStack '"$SYSDIR\taskkill.exe" /F /FI "USERNAME eq $R5" /IM "${EXENAME}"'
+            Pop $0
+            Pop $0
+          !endif
+          Sleep 500
+        ${EndIf}
         Goto retry
     ${EndIf}
 FunctionEnd
