@@ -15,8 +15,14 @@ Desktop-Widget für Windows, das die eigene Contribution-Heatmap aus einem [Gite
 `WidgetTea-<version>-setup.exe` aus den [Releases](https://github.com/Celestial0579/WidgetTea/releases/latest) laden und ausführen.
 Installiert wird nur für das eigene Benutzerkonto (`%LOCALAPPDATA%\Programs\WidgetTea`), ohne Adminrechte.
 Voraussetzung ist die [.NET Desktop Runtime 10](https://dotnet.microsoft.com/download/dotnet/10.0) (x64, mindestens 10.0.14). Fehlt sie oder ist sie veraltet,
-fragt das Setup – auch bei einem Selbst-Update – vor der Installation nach und installiert sie per `winget` (Adminrechte nötig).
+fragt das Setup – auch bei einem Selbst-Update – vor der Installation nach und installiert sie per `winget` (Adminrechte nötig);
+wo `winget` fehlt oder scheitert, öffnet es den Download von Microsoft.
 Sicherheitsupdates der Laufzeit kommen danach über Windows Update.
+
+Wer die Nachfrage ablehnt, behält die bisherige Version: Geprüft wird, bevor das Setup irgendetwas anfasst.
+Nach einem abgelehnten Selbst-Update schaltet das Setup „Updates automatisch installieren“ aus, weil WidgetTea
+dasselbe Update sonst nach jedem Start erneut lüde. Das Update lässt sich über das Tray-Symbol nachholen,
+danach sind automatische Updates wieder an.
 
 Beim ersten Start öffnet sich das Einstellungsfenster:
 
@@ -25,7 +31,7 @@ Beim ersten Start öffnet sich das Einstellungsfenster:
 Gitea-Adresse, Benutzername und Access-Token eintragen (Gitea → Einstellungen → Anwendungen → Token mit Berechtigung *user: Lesen*),
 mit „Verbindung testen“ prüfen und speichern.
 
-Unbeaufsichtigt: `WidgetTea-<version>-setup.exe /S`
+Unbeaufsichtigt: `WidgetTea-<version>-setup.exe /S`. Fehlt dabei die Laufzeit, endet das Setup ohne Nachfrage mit Exitcode 3 und ändert nichts.
 
 ## Datenablage
 
@@ -58,6 +64,20 @@ Voraussetzungen: .NET 10 SDK, [NSIS](https://nsis.sourceforge.io/) (`winget inst
 ```
 
 Für ein neues Release vorher `<Version>` in `WidgetTea.csproj` erhöhen und committen.
+
+Verlangt eine neue Fassung eine neuere .NET-Laufzeit, `DOTNET_MINPATCH` in `installer/WidgetTea.nsi` anheben.
+
+### Tests
+
+```powershell
+dotnet test tests\WidgetTea.Tests\WidgetTea.Tests.csproj   # Unit-Tests des Updaters
+```
+
+Bei jedem Pull Request baut die CI (`.github/workflows/ci.yml`) App und Setup, lässt die Unit-Tests laufen und prüft
+das Setup still: Neuinstallation, Update vom veröffentlichten 1.0.0, Abbruch ohne passende Laufzeit und das abgelehnte
+Selbst-Update. Das gebaute Setup hängt als Artefakt am Lauf. Die Installer-Prüfungen (`tests\installer\Test-Installer.ps1`)
+installieren und deinstallieren WidgetTea für den angemeldeten Benutzer – sie gehören in die CI, nicht auf den eigenen Rechner.
+Veröffentlicht wird in der CI nichts.
 
 ## Lizenz
 
