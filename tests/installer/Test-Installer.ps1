@@ -431,7 +431,7 @@ foreach ($f in 'coreclr.dll', 'hostfxr.dll', 'hostpolicy.dll', 'clrjit.dll', 'cr
     Check (-not (Test-Path (Join-Path $dir $f))) "$f ist weg"
 }
 # Nichts darf liegen bleiben: Im Hauptordner steht genau das, was das neue Setup mitbringt, plus die fremde Datei.
-$expectedFiles = @(@(Get-ChildItem -LiteralPath $publishDir -File | ForEach-Object Name) + 'LICENSE.txt', 'uninstall.exe', 'install-manifest.txt', 'meine-notizen.txt', 'eigene-bibliothek.dll' | Sort-Object)
+$expectedFiles = @(@(Get-ChildItem -LiteralPath $publishDir -File | ForEach-Object Name) + 'LICENSE.txt', 'uninstall.exe', 'WidgetTea-installed-files.txt', 'meine-notizen.txt', 'eigene-bibliothek.dll' | Sort-Object)
 $actualFiles = @(Get-ChildItem -LiteralPath $dir -File | ForEach-Object Name | Sort-Object)
 Write-Host "       Hauptordner: $($actualFiles -join ', ')"
 $unexpected = @(Compare-Object -ReferenceObject $expectedFiles -DifferenceObject $actualFiles | ForEach-Object { "$($_.SideIndicator) $($_.InputObject)" })
@@ -782,11 +782,12 @@ $setupEarlier = Join-Path $work 'WidgetTea-frueher-setup.exe'
 if ($LASTEXITCODE) { throw 'makensis (frühere Fassung) fehlgeschlagen' }
 
 $target = Join-Path $work 'wegfall'
-$manifest = Join-Path $target 'install-manifest.txt'
+$manifest = Join-Path $target 'WidgetTea-installed-files.txt'
 $r = Invoke-Setup $setupEarlier @('/S', "/D=$target")
 Check ($r.ExitCode -eq 0) "Exitcode 0 (war $($r.ExitCode))"
 $listed = @(Get-Content -LiteralPath $manifest)
 Write-Host "       Dateiliste der früheren Fassung: $($listed -join ', ')"
+Check ($listed[0] -ceq 'WidgetTea installed files 1') 'Die Liste beginnt mit der Kennzeile'
 foreach ($entry in 'WidgetTea.exe', 'alte-bibliothek.dll', 'alt\daten.bin', 'alt-leer\rest.bin', 'LICENSE.txt', 'alt\', 'alt-leer\') {
     Check ($listed -contains $entry) "Die Liste nennt $entry"
 }
@@ -813,6 +814,14 @@ $r = Invoke-Setup $setup @('/S', "/D=$target")
 Check ($r.ExitCode -eq 0) "Exitcode 0 (war $($r.ExitCode))"
 Check (Test-Path -LiteralPath $outside) 'Die Datei außerhalb des Installationsordners ist noch da'
 Check (Test-Path (Join-Path $target 'meine.dll')) 'Der Platzhalter *.dll hat die fremde DLL nicht getroffen'
+
+# Eine Datei dieses Namens ohne die Kennzeile stammt nicht vom Setup, etwa von einem anderen Programm im selben
+# Ordner. Sie wird gar nicht befolgt, auch nicht für schlichte Pfade.
+Set-Content -LiteralPath $manifest -Encoding ascii -Value 'meine.dll', 'alt\meins.txt'
+$r = Invoke-Setup $setup @('/S', "/D=$target")
+Check ($r.ExitCode -eq 0) "Exitcode 0 (war $($r.ExitCode))"
+Check ((Test-Path (Join-Path $target 'meine.dll')) -and (Test-Path (Join-Path $target 'alt\meins.txt'))) 'Eine Liste ohne Kennzeile wird nicht befolgt'
+Check ((Get-Content -LiteralPath $manifest -TotalCount 1) -ceq 'WidgetTea installed files 1') 'Danach liegt dort wieder die Liste des Setups'
 
 Start-Process -FilePath (Join-Path $target 'uninstall.exe') -ArgumentList '/S' -Wait
 Wait-Gone (Join-Path $target 'uninstall.exe')
