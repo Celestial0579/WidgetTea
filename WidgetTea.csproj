@@ -11,7 +11,7 @@
     <RootNamespace>WidgetTea</RootNamespace>
     <ApplicationIcon>Assets\WidgetTea.ico</ApplicationIcon>
 
-    <Version>1.0.0</Version>
+    <Version>1.1.0</Version>
     <Product>WidgetTea</Product>
     <Authors>Tim Heyne</Authors>
     <Company>Celestial0579</Company>
@@ -24,6 +24,14 @@
   <ItemGroup>
     <AssemblyMetadata Include="UpdateRepository" Value="$(UpdateRepository)" />
     <EmbeddedResource Include="Assets\WidgetTea.ico" LogicalName="WidgetTea.ico" />
+  </ItemGroup>
+
+  <!-- Diese Projektdatei liegt im Wurzelverzeichnis und erfasst sonst alles darunter – auch das Testprojekt. -->
+  <ItemGroup>
+    <Compile Remove="tests\**" />
+    <EmbeddedResource Remove="tests\**" />
+    <None Remove="tests\**" />
+    <InternalsVisibleTo Include="WidgetTea.Tests" />
   </ItemGroup>
 
 </Project>
