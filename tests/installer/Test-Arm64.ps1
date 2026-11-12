@@ -10,12 +10,14 @@
   deinstalliert WidgetTea für den angemeldeten Benutzer. Außerhalb der CI läuft es deshalb nur mit -Force.
 
   Was geprüft wird:
-    1  Fehlt die x64-Laufzeit, endet /S mit Exitcode 3 und installiert nichts, auch wenn die ARM64-Laufzeit
-       vorhanden ist.
+    1  Reicht die x64-Laufzeit nicht, endet /S mit Exitcode 3 und installiert nichts, auch wenn die
+       ARM64-Laufzeit vorhanden und neu genug ist.
     2  Der winget-Aufruf des Setups (aus installer\DotnetRuntime.nsh gelesen) holt die x64-Laufzeit.
     3  Danach installiert /S, und die App lädt coreclr.dll aus dotnet\x64.
 
-  Ist die x64-Laufzeit auf dem Rechner schon da, entfallen 1 und 2.
+  Bringt der Rechner die x64-Laufzeit schon mit, verlangt eine Testfassung des Setups so viel wie die
+  ARM64-Laufzeit hergibt; ist die x64-Laufzeit älter als die, „reicht sie nicht", und 1 und 2 laufen trotzdem.
+  Sonst entfallen sie.
 
 .PARAMETER Force
   Läuft auch außerhalb der CI. Nur auf einem Wegwerf-Rechner benutzen.
@@ -68,8 +70,8 @@ function Get-Patch([string]$Folder) {
     ($patches | Measure-Object -Maximum).Maximum
 }
 
-function Invoke-SetupSilently {
-    $p = Start-Process -FilePath $setup -ArgumentList '/S', "/D=$target" -PassThru -Wait
+function Invoke-SetupSilently([string]$Exe) {
+    $p = Start-Process -FilePath $Exe -ArgumentList '/S', "/D=$target" -PassThru -Wait
     $p.ExitCode
 }
 
@@ -84,15 +86,34 @@ if ($nsh -notmatch '"\$\{DOTNET_WINGET_EXE\}" (install [^'']+)''') { throw 'wing
 $wingetArguments = $Matches[1].Replace('${DOTNET_WINGET}', $package)
 
 Step '0 Ausgangslage'
+$armPatch = Get-Patch $armDesktop
+$x64Patch = Get-Patch $x64Desktop
 Write-Host "       Windows: $arch, Prozess: $([System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture)"
-Write-Host "       Desktop Runtime ARM64: 10.0.$(Get-Patch $armDesktop)   x64: 10.0.$(Get-Patch $x64Desktop)   (-1 = fehlt)"
+Write-Host "       Desktop Runtime ARM64: 10.0.$armPatch   x64: 10.0.$x64Patch   (-1 = fehlt)"
 Write-Host "       Das Setup verlangt x64 ab 10.0.$minPatch und ruft auf: winget $wingetArguments"
 Check ($wingetArguments -match '--architecture x64') 'Der winget-Aufruf des Setups verlangt ausdrücklich x64'
 
-if ((Get-Patch $x64Desktop) -lt $minPatch) {
-    Step '1 /S ohne x64-Laufzeit'
-    if ((Get-Patch $armDesktop) -ge $minPatch) { Note 'Die ARM64-Laufzeit ist vorhanden; das Setup darf sie nicht für die gesuchte halten' }
-    $code = Invoke-SetupSilently
+# Welches Setup die Prüfung nimmt und wie viel es verlangt. Reicht die x64-Laufzeit dem gebauten Setup schon, verlangt
+# eine Testfassung so viel, wie die ARM64-Laufzeit hergibt. Ist die x64-Laufzeit älter, gibt es damit die Lage, um
+# die es geht: x64 reicht nicht, ARM64 würde reichen, darf aber nicht zählen.
+$testSetup = $setup
+$need = $minPatch
+if ($x64Patch -ge $minPatch -and $armPatch -gt $x64Patch) {
+    $need = $armPatch
+    $makensis = @("${env:ProgramFiles(x86)}\NSIS\makensis.exe", "$env:ProgramFiles\NSIS\makensis.exe") |
+        Where-Object { Test-Path $_ } | Select-Object -First 1
+    if (-not $makensis) { throw 'NSIS nicht gefunden' }
+    $testSetup = Join-Path $work 'WidgetTea-verlangt-mehr-setup.exe'
+    & $makensis /V2 /INPUTCHARSET UTF8 "/DVERSION=$version" "/DSRCDIR=$(Join-Path $root "artifacts\$version\publish")" "/DOUTFILE=$testSetup" `
+        "/DDOTNET_MINPATCH=$need" (Join-Path $root 'installer\WidgetTea.nsi') | Out-Null
+    if ($LASTEXITCODE) { throw 'makensis (Testfassung) fehlgeschlagen' }
+    Ok "Testfassung des Setups gebaut: verlangt x64 ab 10.0.$need"
+}
+
+if ($x64Patch -lt $need) {
+    Step "1 /S, die x64-Laufzeit reicht nicht (verlangt 10.0.$need, vorhanden 10.0.$x64Patch)"
+    if ($armPatch -ge $need) { Note "Die ARM64-Laufzeit 10.0.$armPatch würde reichen; das Setup darf sie nicht für die gesuchte halten" }
+    $code = Invoke-SetupSilently $testSetup
     Check ($code -eq 3) "Exitcode 3 (war $code)"
     Check (-not (Test-Path $target)) 'Installiert wurde nichts'
 
@@ -102,22 +123,29 @@ if ((Get-Patch $x64Desktop) -lt $minPatch) {
     $out = Join-Path $logs 'winget-arm64.log'
     $p = Start-Process -FilePath $winget -ArgumentList $wingetArguments -PassThru -Wait -NoNewWindow -RedirectStandardOutput $out
     Get-Content -LiteralPath $out -ErrorAction SilentlyContinue | Where-Object { $_.Trim().Length -gt 3 } | Select-Object -Last 6 | ForEach-Object { Write-Host "       winget: $_" }
-    Check ($p.ExitCode -eq 0) "winget endet mit 0 (war $($p.ExitCode))"
-    Check ((Get-Patch $x64Desktop) -ge $minPatch) "Die x64-Laufzeit ist da: 10.0.$(Get-Patch $x64Desktop) unter dotnet\x64"
+    Write-Host "       winget endete mit $($p.ExitCode); x64 jetzt 10.0.$(Get-Patch $x64Desktop)"
+    Check ((Get-Patch $x64Desktop) -ge $need) "Die x64-Laufzeit reicht jetzt: 10.0.$(Get-Patch $x64Desktop) unter dotnet\x64"
 } else {
-    Note "Die x64-Laufzeit ist auf diesem Rechner schon da (10.0.$(Get-Patch $x64Desktop)); 1 und 2 entfallen"
+    Note "Die x64-Laufzeit reicht schon (10.0.$x64Patch) und ist nicht älter als die ARM64-Laufzeit; 1 und 2 entfallen"
 }
 
 Step '3 Installation und Start der App'
-$code = Invoke-SetupSilently
+$code = Invoke-SetupSilently $testSetup
 Check ($code -eq 0) "Exitcode 0 (war $code)"
 $exe = Join-Path $target 'WidgetTea.exe'
 Check (Test-Path $exe) 'WidgetTea.exe ist da'
 $trace = Join-Path $logs 'corehost-arm64.log'
+# Der CI-Job setzt DOTNET_ROOT auf die ARM64-Laufzeit (actions/setup-dotnet). Ein x64-Programm nähme sie von dort
+# und scheiterte an der falschen Architektur. Auf einem gewöhnlichen Rechner ist die Variable nicht gesetzt, also
+# startet die App hier ohne sie.
+$dotnetRoot = $env:DOTNET_ROOT
+if ($dotnetRoot) { Note "DOTNET_ROOT ($dotnetRoot) gilt für den Start der App nicht" }
+$env:DOTNET_ROOT = $null
 $env:COREHOST_TRACE = '1'
 $env:COREHOST_TRACEFILE = $trace
 try { $app = Start-Process -FilePath $exe -PassThru } finally {
     Remove-Item Env:COREHOST_TRACE, Env:COREHOST_TRACEFILE -ErrorAction SilentlyContinue
+    $env:DOTNET_ROOT = $dotnetRoot
 }
 $coreclr = $null
 $deadline = (Get-Date).AddSeconds(60)

@@ -20,6 +20,10 @@ wo `winget` fehlt oder scheitert, öffnet es den Download von Microsoft.
 Die Abfrage der Benutzerkontensteuerung zeigt Windows dabei oft nicht von selbst, sondern nur als blinkendes Schild in der Taskleiste.
 Sicherheitsupdates der Laufzeit kommen danach über Windows Update.
 
+Auf einem ARM64-Windows läuft WidgetTea in der x64-Emulation und braucht auch dort die x64-Fassung der Laufzeit.
+Ist die Umgebungsvariable `DOTNET_ROOT` gesetzt und zeigt sie auf die ARM64-Laufzeit, startet WidgetTea nicht.
+Abhilfe: `DOTNET_ROOT_X64` auf `C:\Program Files\dotnet\x64` setzen.
+
 Wer die Nachfrage ablehnt, behält die bisherige Version: Geprüft wird, bevor das Setup irgendetwas anfasst.
 Nach einem abgelehnten Selbst-Update schaltet das Setup „Updates automatisch installieren“ aus, weil WidgetTea
 dasselbe Update sonst nach jedem Start erneut lüde. Das Update lässt sich über das Tray-Symbol nachholen,
