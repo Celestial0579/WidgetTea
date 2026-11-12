@@ -37,11 +37,19 @@ public sealed class UpdateService
 
     private static string TempDir => Path.Combine(Path.GetTempPath(), "WidgetTea-Update");
 
+    /// <summary>Ordner, unter dem die geladenen Setups liegen; in Tests ein anderer als im Betrieb.</summary>
+    internal string DownloadRoot { get; init; } = TempDir;
+
     private readonly HttpClient _http;
 
-    public UpdateService(string? token)
+    public UpdateService(string? token) : this(token, new HttpClientHandler())
     {
-        _http = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
+    }
+
+    /// <summary>Dasselbe über einen vorgegebenen Transport, damit sich Abfrage und Download prüfen lassen.</summary>
+    internal UpdateService(string? token, HttpMessageHandler handler)
+    {
+        _http = new HttpClient(handler) { Timeout = TimeSpan.FromMinutes(5) };
         _http.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("WidgetTea", CurrentVersion.ToString(3)));
         _http.DefaultRequestHeaders.Accept.ParseAdd("application/json");
         if (!string.IsNullOrEmpty(token))
@@ -64,12 +72,13 @@ public sealed class UpdateService
     }
 
     /// <summary>Neueres Release oder null. Wirft bei Netzwerkfehlern (Gitea nicht erreichbar).</summary>
-    public async Task<UpdateInfo?> CheckAsync(CancellationToken ct = default)
-    {
-        if (RepositoryUrl == null)
-            return null;
+    public Task<UpdateInfo?> CheckAsync(CancellationToken ct = default) =>
+        RepositoryUrl == null ? Task.FromResult<UpdateInfo?>(null) : CheckAsync(RepositoryUrl, CurrentVersion, ct);
 
-        using var resp = await _http.GetAsync(LatestReleaseApi(RepositoryUrl), ct);
+    /// <summary>Die Abfrage selbst, mit Repository und laufender Version als Angaben von außen.</summary>
+    internal async Task<UpdateInfo?> CheckAsync(string repositoryUrl, Version currentVersion, CancellationToken ct = default)
+    {
+        using var resp = await _http.GetAsync(LatestReleaseApi(repositoryUrl), ct);
         if (resp.StatusCode == HttpStatusCode.NotFound)
             return null; // noch kein Release (oder Repo nicht sichtbar)
         resp.EnsureSuccessStatusCode();
@@ -77,7 +86,7 @@ public sealed class UpdateService
         var release = await resp.Content.ReadFromJsonAsync<GiteaRelease>(ct);
         if (release is null || release.Draft || release.Prerelease)
             return null;
-        if (!TryParseVersion(release.TagName, out var version) || version <= CurrentVersion)
+        if (!TryParseVersion(release.TagName, out var version) || version <= currentVersion)
             return null;
 
         var setup = release.Assets.FirstOrDefault(a => a.Name.EndsWith("-setup.exe", StringComparison.OrdinalIgnoreCase));
@@ -97,8 +106,11 @@ public sealed class UpdateService
 
         var expected = (await _http.GetStringAsync(update.ChecksumUrl, ct)).Trim().Split(' ', '\t', '\r', '\n')[0];
 
-        Directory.CreateDirectory(TempDir);
-        var target = Path.Combine(TempDir, Path.GetFileName(update.SetupName));
+        // Jeder Download bekommt seinen eigenen Ordner. Läuft das Setup eines früheren Versuchs noch (es zeigt etwa
+        // noch seinen Hinweis), hält es seine Datei fest; ein zweiter Download unter demselben Namen scheiterte daran.
+        var folder = Path.Combine(DownloadRoot, Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(folder);
+        var target = Path.Combine(folder, Path.GetFileName(update.SetupName));
         using (var resp = await _http.GetAsync(update.SetupUrl, HttpCompletionOption.ResponseHeadersRead, ct))
         {
             resp.EnsureSuccessStatusCode();
@@ -113,7 +125,7 @@ public sealed class UpdateService
 
         if (!actual.Equals(expected, StringComparison.OrdinalIgnoreCase))
         {
-            File.Delete(target);
+            Directory.Delete(folder, recursive: true);
             throw new InvalidOperationException("Die Prüfsumme des Updates stimmt nicht – Download verworfen.");
         }
         return target;
@@ -123,17 +135,36 @@ public sealed class UpdateService
     public static void LaunchInstaller(string setupPath) =>
         Process.Start(new ProcessStartInfo(setupPath, "/S /RESTART") { UseShellExecute = true });
 
-    /// <summary>Räumt Reste eines vorherigen Updates auf (beim Start aufrufen).</summary>
-    public static void CleanupAfterUpdate()
+    /// <summary>Räumt Reste vorheriger Updates auf (beim Start aufrufen).</summary>
+    public static void CleanupAfterUpdate() => Cleanup(TempDir);
+
+    /// <summary>
+    /// Entfernt, was sich entfernen lässt. Ein Setup, das noch läuft, hält seinen Ordner fest; der bleibt dann
+    /// bis zum nächsten Start liegen, alles andere verschwindet trotzdem.
+    /// </summary>
+    internal static void Cleanup(string root)
     {
+        if (!Directory.Exists(root))
+            return;
+        foreach (var entry in Directory.GetFileSystemEntries(root))
+        {
+            try
+            {
+                if (Directory.Exists(entry))
+                    Directory.Delete(entry, recursive: true);
+                else
+                    File.Delete(entry);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+            }
+        }
         try
         {
-            if (Directory.Exists(TempDir))
-                Directory.Delete(TempDir, recursive: true);
+            Directory.Delete(root);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            // Setup läuft evtl. noch – beim nächsten Start erneut
         }
     }
 

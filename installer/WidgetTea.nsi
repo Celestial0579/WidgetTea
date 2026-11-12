@@ -38,8 +38,15 @@ RequestExecutionLevel user
 
 ; Was das Setup installiert, als Delete-Befehle für die Deinstallation: beim Übersetzen aus SRCDIR erzeugt.
 ; So entfernt die Deinstallation genau die installierten Dateien, auch wenn im Programm später eine dazukommt.
+; Dieselbe Liste kommt als Textdatei mit in den Installationsordner (MANIFESTNAME). Ein späteres Setup liest dort,
+; was die bisherige Fassung installiert hat, und entfernt es vor dem Kopieren – so bleibt nichts liegen, wenn in
+; einer neuen Fassung eine Datei wegfällt. Befolgt wird nur eine Liste, die mit der Kennzeile MANIFESTHEAD beginnt:
+; Der Installationsordner ist frei wählbar, und was dort schon liegt, gehört vielleicht einem anderen Programm.
+!define MANIFESTNAME "WidgetTea-installed-files.txt"
+!define MANIFESTHEAD "WidgetTea installed files 1"
 !tempfile PAYLOADLIST
-!system 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "${__FILEDIR__}\New-PayloadList.ps1" -Source "${SRCDIR}" -Out "${PAYLOADLIST}"' = 0
+!tempfile MANIFESTFILE
+!system 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "${__FILEDIR__}\New-PayloadList.ps1" -Source "${SRCDIR}" -Out "${PAYLOADLIST}" -Manifest "${MANIFESTFILE}" -ManifestHeader "${MANIFESTHEAD}" -Also LICENSE.txt' = 0
 
 !define APPNAME     "WidgetTea"
 !define DISPLAYNAME "WidgetTea – Gitea-Contributions auf dem Desktop"
@@ -72,8 +79,14 @@ RequestExecutionLevel user
   !define DOTNET_MINPATCH 14
 !endif
 !define DOTNET_NAME     ".NET Desktop Runtime"
-!define DOTNET_WINGET   "Microsoft.DotNet.DesktopRuntime.10"
-!define DOTNET_URL      "https://aka.ms/dotnet/10.0/windowsdesktop-runtime-win-x64.exe"
+; Paket und Adresse sind wie die Mindestversion von außen überschreibbar, nur für die Installer-Prüfungen:
+; So lässt sich der Weg über winget mit einem Paket gehen, das es nicht gibt, und ohne dass sich ein Browser öffnet.
+!ifndef DOTNET_WINGET
+  !define DOTNET_WINGET "Microsoft.DotNet.DesktopRuntime.10"
+!endif
+!ifndef DOTNET_URL
+  !define DOTNET_URL    "https://aka.ms/dotnet/10.0/windowsdesktop-runtime-win-x64.exe"
+!endif
 ; Nachfragen mit Zeitablauf tragen denselben Fenstertitel wie die übrigen Meldungen des Setups.
 !define SETUPCAPTION    "WidgetTea ${VERSION} – Installation"
 !define DOTNET_CAPTION  "${SETUPCAPTION}"
@@ -136,32 +149,92 @@ Var Restart
 
 ; ---------- Hilfsfunktionen ----------
 
-; Wartet, bis WidgetTea beendet ist (Dateien wären sonst gesperrt).
+; Läuft WidgetTea? $R7 = 1, wenn ja.
+; Gefragt wird nicht nach dem Programmnamen: Den trägt auch das WidgetTea eines anderen angemeldeten Benutzers
+; und jedes fremde Programm, das zufällig so heißt.
+;   1. Der Mutex, mit dem die App eine zweite Instanz verhindert (App.xaml.cs). Er gilt je Sitzung.
+;   2. Die EXE im Installationsordner: Solange ein Programm läuft, lässt sich seine Datei nicht zum Schreiben
+;      öffnen. Das erfasst auch eine Instanz in einer anderen Sitzung desselben Benutzers.
+!define APPMUTEX "Local\WidgetTea.SingleInstance"
+!macro APP_RUNNING_FUNC un
+Function ${un}IsAppRunning
+  Push $R6
+  StrCpy $R7 0
+  System::Call 'kernel32::OpenMutexW(i 0x00100000, i 0, w "${APPMUTEX}") p .R6'   ; 0x00100000 = SYNCHRONIZE
+  ${If} $R6 != 0
+    System::Call 'kernel32::CloseHandle(p R6)'
+    StrCpy $R7 1
+  ${ElseIf} ${FileExists} "$INSTDIR\${EXENAME}"
+    ClearErrors
+    FileOpen $R6 "$INSTDIR\${EXENAME}" a
+    ${If} ${Errors}
+      StrCpy $R7 1
+    ${Else}
+      FileClose $R6
+    ${EndIf}
+  ${EndIf}
+  Pop $R6
+FunctionEnd
+!macroend
+!insertmacro APP_RUNNING_FUNC ""
+!insertmacro APP_RUNNING_FUNC "un."
+
+; Sorgt dafür, dass WidgetTea nicht mehr läuft (Dateien wären sonst gesperrt).
 ; Beim Update (/RESTART) beendet sich die App gerade selbst → bis zu 15 s still warten.
-; Bei einer normalen Installation wird das laufende Widget nach Rückfrage beendet.
+; Sonst wird das laufende Widget nach Rückfrage beendet, und zwar nur Prozesse des angemeldeten Benutzers.
+; Gelingt das nach ${CLOSE_APP_TRIES} Versuchen nicht, gibt das Setup auf, statt endlos zu wiederholen.
+; Hilfsprogramme von Windows immer mit vollem Pfad aus dem Systemordner: Beim bloßen Namen sucht Windows zuerst
+; im Ordner des Setups und im aktuellen Ordner, und dort kann ein fremdes Programm gleichen Namens liegen.
+;
+; /DCLOSE_APP_NO_KILL ist nur für die Installer-Prüfungen da: Das Setup beendet dann nichts, und es lässt sich
+; prüfen, dass es aufgibt.
+!define CLOSE_APP_TRIES 5
 !macro CLOSE_APP_FUNC un WOFUER
 Function ${un}CloseRunningApp
-  StrCpy $R8 0
+  StrCpy $R8 0          ; Runden stillen Wartens beim Selbst-Update
+  StrCpy $R9 0          ; Versuche, die App zu beenden
+  System::Call 'advapi32::GetUserNameW(w .R5, *i ${NSIS_MAX_STRLEN}) i .R4'
   retry:
-    nsExec::ExecToStack 'cmd.exe /C tasklist /FI "IMAGENAME eq ${EXENAME}" /NH | find /I "${EXENAME}"'
-    Pop $0
-    Pop $1
-    ${If} $0 == 0
+    Call ${un}IsAppRunning
+    ${If} $R7 == 1
       ${If} $Restart == 1
       ${AndIf} $R8 < 30
         IntOp $R8 $R8 + 1
         Sleep 500
         Goto retry
       ${EndIf}
-      MessageBox MB_OKCANCEL|MB_ICONEXCLAMATION \
-        "WidgetTea läuft gerade und wird für die ${WOFUER} beendet." \
-        /SD IDOK IDOK kill
-      Abort
+      ${If} $R9 == 0
+        MessageBox MB_OKCANCEL|MB_ICONEXCLAMATION \
+          "WidgetTea läuft gerade und wird für die ${WOFUER} beendet." \
+          /SD IDOK IDOK kill
+        Abort
+      ${EndIf}
+      ${If} $R9 >= ${CLOSE_APP_TRIES}
+        MessageBox MB_RETRYCANCEL|MB_ICONSTOP \
+          "WidgetTea ließ sich nicht beenden.$\r$\n$\r$\nBitte über das Tray-Symbol beenden und dann „Wiederholen“ wählen." \
+          /SD IDCANCEL IDRETRY again
+        Abort
+        again:
+          StrCpy $R9 1
+          Goto retry
+      ${EndIf}
       kill:
-        nsExec::ExecToStack 'taskkill /IM "${EXENAME}"'
+        IntOp $R9 $R9 + 1
+        !ifndef CLOSE_APP_NO_KILL
+          nsExec::ExecToStack '"$SYSDIR\taskkill.exe" /FI "USERNAME eq $R5" /IM "${EXENAME}"'
+          Pop $0
+          Pop $0
+        !endif
         Sleep 1500
-        nsExec::ExecToStack 'taskkill /F /IM "${EXENAME}"'
-        Sleep 500
+        Call ${un}IsAppRunning
+        ${If} $R7 == 1
+          !ifndef CLOSE_APP_NO_KILL
+            nsExec::ExecToStack '"$SYSDIR\taskkill.exe" /F /FI "USERNAME eq $R5" /IM "${EXENAME}"'
+            Pop $0
+            Pop $0
+          !endif
+          Sleep 500
+        ${EndIf}
         Goto retry
     ${EndIf}
 FunctionEnd
@@ -255,32 +328,126 @@ Function UpdateDeclined
   MessageBox MB_OK|MB_ICONINFORMATION|MB_TOPMOST "$R4$R5$\r$\n$\r$\n$R6"
 FunctionEnd
 
-; Entfernt die .NET-Laufzeit, die Version 1.0.x selbst mitbrachte. Sie muss weg: Solange hostfxr.dll und
-; coreclr.dll neben der EXE liegen, nimmt der Starter sie statt der installierten Laufzeit.
-; Gelöscht wird gezielt und nicht der ganze Ordner. Wer WidgetTea in einen Ordner mit eigenen Dateien
-; installiert hat, behält sie (bis auf DLLs im Hauptordner – die lassen sich von denen der Laufzeit
-; nicht unterscheiden).
+; Entfernt, was Version 1.0.0 installiert hat, samt der .NET-Laufzeit, die sie selbst mitbrachte. Die muss weg:
+; Solange hostfxr.dll und coreclr.dll neben der EXE liegen, nimmt der Starter sie statt der installierten Laufzeit.
+; 1.0.0 war die einzige Fassung mit eigener Laufzeit, ihre Dateien stehen fest (Bundled-1.0.0.nsh). Entfernt
+; werden genau sie und nichts sonst: Wer WidgetTea in einen Ordner mit eigenen Dateien installiert hat, behält
+; sie, auch eigene DLLs.
 Function RemoveBundledRuntime
-  Delete "$INSTDIR\*.dll"
-  Delete "$INSTDIR\createdump.exe"
-  Delete "$INSTDIR\${EXENAME}"
-  Delete "$INSTDIR\${APPNAME}.deps.json"
-  Delete "$INSTDIR\${APPNAME}.runtimeconfig.json"
-  ; Sprachordner der Laufzeit (cs, de, … zh-Hant): nur die *.resources.dll, den Ordner nur, wenn er danach leer ist.
-  FindFirst $R0 $R1 "$INSTDIR\*.*"
-  ${DoWhile} $R1 != ""
-    ${If} $R1 != "."
-    ${AndIf} $R1 != ".."
-    ${AndIf} ${FileExists} "$INSTDIR\$R1\*.resources.dll"
-      Delete "$INSTDIR\$R1\*.resources.dll"
-      RMDir "$INSTDIR\$R1"
+  !include "Bundled-1.0.0.nsh"
+FunctionEnd
+
+; Push <Pfad>  Call IsPlainRelativePath  Pop <1|0>
+; 1 nur für einen schlichten Pfad unterhalb des Installationsordners: nicht leer, kein Laufwerk, kein
+; Schrägstrich, kein „..“ und kein Platzhalter. Die Dateiliste liegt in einem Ordner, in den der Nutzer schreiben
+; darf. Was dort steht, darf das Setup weder aus dem Ordner hinausführen noch mehr treffen als eine Datei.
+Function IsPlainRelativePath
+  Exch $R1
+  Push $R2
+  Push $R3
+  Push $R4
+  Push $R5
+  StrCpy $R3 1
+  StrLen $R5 $R1
+  ${If} $R5 == 0
+    StrCpy $R3 0
+  ${EndIf}
+  StrCpy $R2 $R1 1
+  ${If} $R2 == "\"
+    StrCpy $R3 0
+  ${EndIf}
+  StrCpy $R4 0
+  ${DoWhile} $R4 < $R5
+    StrCpy $R2 $R1 1 $R4
+    ${If} $R2 == ":"
+    ${OrIf} $R2 == "/"
+    ${OrIf} $R2 == "*"
+    ${OrIf} $R2 == "?"
+      StrCpy $R3 0
     ${EndIf}
-    FindNext $R0 $R1
+    StrCpy $R2 $R1 2 $R4
+    ${If} $R2 == ".."
+      StrCpy $R3 0
+    ${EndIf}
+    IntOp $R4 $R4 + 1
   ${Loop}
-  FindClose $R0
+  StrCpy $R1 $R3
+  Pop $R5
+  Pop $R4
+  Pop $R3
+  Pop $R2
+  Exch $R1
+FunctionEnd
+
+; Entfernt, was die bisher installierte Fassung mitgebracht hat, laut ihrer Liste im Installationsordner.
+; Was die neue Fassung weiter enthält, schreibt das Setup gleich danach wieder hin; was weggefallen ist, bleibt
+; weg. Fremde Dateien stehen in keiner Liste und bleiben liegen. Ein Ordner verschwindet nur, wenn er leer ist.
+; Fassungen vor dieser hatten keine Liste, dann geschieht hier nichts. Ebenso, wenn die Datei nicht mit der
+; Kennzeile beginnt: Dann stammt sie nicht von diesem Setup.
+Function RemovePreviousPayload
+  ${IfNot} ${FileExists} "$INSTDIR\${MANIFESTNAME}"
+    Return
+  ${EndIf}
+  ClearErrors
+  FileOpen $R0 "$INSTDIR\${MANIFESTNAME}" r
+  ${If} ${Errors}
+    Return
+  ${EndIf}
+  FileRead $R0 $R1
+  ${Do}                             ; Zeilenende der Kennzeile abschneiden
+    StrCpy $R2 $R1 1 -1
+    ${If} $R2 == "$\r"
+    ${OrIf} $R2 == "$\n"
+      StrCpy $R1 $R1 -1
+    ${Else}
+      ${ExitDo}
+    ${EndIf}
+  ${Loop}
+  ${If} $R1 S!= "${MANIFESTHEAD}"
+    FileClose $R0
+    Return
+  ${EndIf}
+  ${Do}
+    ClearErrors
+    FileRead $R0 $R1
+    ${If} ${Errors}
+      ${ExitDo}
+    ${EndIf}
+    ${Do}                           ; Zeilenende abschneiden
+      StrCpy $R2 $R1 1 -1
+      ${If} $R2 == "$\r"
+      ${OrIf} $R2 == "$\n"
+        StrCpy $R1 $R1 -1
+      ${Else}
+        ${ExitDo}
+      ${EndIf}
+    ${Loop}
+    StrCpy $R2 $R1 1 -1
+    ${If} $R2 == "\"                ; Ordner stehen mit „\“ am Ende in der Liste
+      StrCpy $R1 $R1 -1
+      Push $R1
+      Call IsPlainRelativePath
+      Pop $R2
+      ${If} $R2 == 1
+        RMDir "$INSTDIR\$R1"
+      ${EndIf}
+    ${Else}
+      Push $R1
+      Call IsPlainRelativePath
+      Pop $R2
+      ${If} $R2 == 1
+        Delete "$INSTDIR\$R1"
+      ${EndIf}
+    ${EndIf}
+  ${Loop}
+  FileClose $R0
 FunctionEnd
 
 Function .onInit
+  ; Arbeitsordner auf den Systemordner stellen. Nach einem Doppelklick ist es der Ordner der Setup-Datei, und
+  ; alles, was das Setup startet, erbte ihn samt dem, was dort sonst noch liegt.
+  SetOutPath "$SYSDIR"
+
   ${IfNot} ${AtLeastWin10}
     MessageBox MB_OK|MB_ICONSTOP "WidgetTea benötigt Windows 10 oder neuer." /SD IDOK
     Abort
@@ -315,6 +482,16 @@ Function .onInstSuccess
   ${EndIf}
 FunctionEnd
 
+; Scheitert die Installation beim Selbst-Update, startet das Setup die App trotzdem wieder. Sonst bliebe das Widget
+; geschlossen, bis jemand es vermisst. Dass sie das Update nicht gleich noch einmal versucht, regelt die App
+; selbst: Sie hat den begonnenen Versuch vermerkt (UpdateAttempt.cs).
+Function .onInstFailed
+  ${If} $Restart == 1
+  ${AndIf} ${FileExists} "$INSTDIR\${EXENAME}"
+    Call LaunchApp
+  ${EndIf}
+FunctionEnd
+
 ; ---------- Installation ----------
 
 Section "WidgetTea (erforderlich)" SecMain
@@ -326,10 +503,13 @@ Section "WidgetTea (erforderlich)" SecMain
   ${If} ${FileExists} "$INSTDIR\coreclr.dll"
     Call RemoveBundledRuntime
   ${EndIf}
+  ; Was die bisherige Fassung installiert hat und die neue nicht mehr enthält, soll nicht liegen bleiben.
+  Call RemovePreviousPayload
 
   SetOutPath "$INSTDIR"
   File /r "${SRCDIR}\*.*"
   File "/oname=LICENSE.txt" "..\LICENSE"
+  File "/oname=${MANIFESTNAME}" "${MANIFESTFILE}"
   WriteUninstaller "$INSTDIR\uninstall.exe"
 
   CreateShortcut "$SMPROGRAMS\WidgetTea.lnk" "$INSTDIR\${EXENAME}" "" "$INSTDIR\${EXENAME}" 0 SW_SHOWNORMAL "" "Gitea-Contributions auf dem Desktop"
@@ -380,6 +560,7 @@ Section "un.WidgetTea" SecUnMain
   ; gehört nicht WidgetTea und bleibt. Der Ordner selbst verschwindet nur, wenn er danach leer ist.
   !include "${PAYLOADLIST}"
   Delete "$INSTDIR\LICENSE.txt"
+  Delete "$INSTDIR\${MANIFESTNAME}"
   Delete "$INSTDIR\uninstall.exe"
   RMDir "$INSTDIR"
 
@@ -399,3 +580,4 @@ SectionEnd
 !insertmacro MUI_UNFUNCTION_DESCRIPTION_END
 
 !delfile "${PAYLOADLIST}"
+!delfile "${MANIFESTFILE}"
