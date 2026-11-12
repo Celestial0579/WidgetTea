@@ -45,8 +45,10 @@
 
     <StackPanel Margin="20,10,20,18">
         <TextBlock Style="{StaticResource Label}" Text="Gitea-Adresse"/>
-        <TextBox x:Name="BaseUrlBox"/>
+        <TextBox x:Name="BaseUrlBox" TextChanged="OnBaseUrlChanged"/>
         <TextBlock Style="{StaticResource Hint}" Text="z. B. https://gitea.firma.local"/>
+        <TextBlock x:Name="HttpWarning" Style="{StaticResource Hint}" Foreground="#D29922" Visibility="Collapsed"
+                   Text="Achtung: Über http:// wird das Access-Token unverschlüsselt übertragen."/>
 
         <TextBlock Style="{StaticResource Label}" Text="Benutzername"/>
         <TextBox x:Name="UsernameBox"/>
