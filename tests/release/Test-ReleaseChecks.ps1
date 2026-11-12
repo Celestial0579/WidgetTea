@@ -202,3 +202,7 @@ finally {
     try { Remove-Item -LiteralPath $work -Recurse -Force }
     catch { Write-Host "   --  Der Wegwerf-Ordner blieb liegen: $work" -ForegroundColor Yellow }
 }
+
+# In 8 und 10 darf die Kopie von release.ps1 am Bauen scheitern. Ohne diese Zeile bliebe dessen Exitcode stehen,
+# und der Schritt in der CI gälte als gescheitert, obwohl alle Prüfungen bestanden sind.
+exit 0
