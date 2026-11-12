@@ -40,11 +40,13 @@ RequestExecutionLevel user
 ; So entfernt die Deinstallation genau die installierten Dateien, auch wenn im Programm später eine dazukommt.
 ; Dieselbe Liste kommt als Textdatei mit in den Installationsordner (MANIFESTNAME). Ein späteres Setup liest dort,
 ; was die bisherige Fassung installiert hat, und entfernt es vor dem Kopieren – so bleibt nichts liegen, wenn in
-; einer neuen Fassung eine Datei wegfällt.
+; einer neuen Fassung eine Datei wegfällt. Befolgt wird nur eine Liste, die mit der Kennzeile MANIFESTHEAD beginnt:
+; Der Installationsordner ist frei wählbar, und was dort schon liegt, gehört vielleicht einem anderen Programm.
+!define MANIFESTNAME "WidgetTea-installed-files.txt"
+!define MANIFESTHEAD "WidgetTea installed files 1"
 !tempfile PAYLOADLIST
 !tempfile MANIFESTFILE
-!system 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "${__FILEDIR__}\New-PayloadList.ps1" -Source "${SRCDIR}" -Out "${PAYLOADLIST}" -Manifest "${MANIFESTFILE}" -Also LICENSE.txt' = 0
-!define MANIFESTNAME "install-manifest.txt"
+!system 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "${__FILEDIR__}\New-PayloadList.ps1" -Source "${SRCDIR}" -Out "${PAYLOADLIST}" -Manifest "${MANIFESTFILE}" -ManifestHeader "${MANIFESTHEAD}" -Also LICENSE.txt' = 0
 
 !define APPNAME     "WidgetTea"
 !define DISPLAYNAME "WidgetTea – Gitea-Contributions auf dem Desktop"
@@ -374,7 +376,8 @@ FunctionEnd
 ; Entfernt, was die bisher installierte Fassung mitgebracht hat, laut ihrer Liste im Installationsordner.
 ; Was die neue Fassung weiter enthält, schreibt das Setup gleich danach wieder hin; was weggefallen ist, bleibt
 ; weg. Fremde Dateien stehen in keiner Liste und bleiben liegen. Ein Ordner verschwindet nur, wenn er leer ist.
-; Fassungen vor dieser hatten keine Liste, dann geschieht hier nichts.
+; Fassungen vor dieser hatten keine Liste, dann geschieht hier nichts. Ebenso, wenn die Datei nicht mit der
+; Kennzeile beginnt: Dann stammt sie nicht von diesem Setup.
 Function RemovePreviousPayload
   ${IfNot} ${FileExists} "$INSTDIR\${MANIFESTNAME}"
     Return
@@ -382,6 +385,20 @@ Function RemovePreviousPayload
   ClearErrors
   FileOpen $R0 "$INSTDIR\${MANIFESTNAME}" r
   ${If} ${Errors}
+    Return
+  ${EndIf}
+  FileRead $R0 $R1
+  ${Do}                             ; Zeilenende der Kennzeile abschneiden
+    StrCpy $R2 $R1 1 -1
+    ${If} $R2 == "$\r"
+    ${OrIf} $R2 == "$\n"
+      StrCpy $R1 $R1 -1
+    ${Else}
+      ${ExitDo}
+    ${EndIf}
+  ${Loop}
+  ${If} $R1 S!= "${MANIFESTHEAD}"
+    FileClose $R0
     Return
   ${EndIf}
   ${Do}
