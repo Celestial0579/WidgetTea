@@ -93,6 +93,8 @@ installieren und deinstallieren WidgetTea für den angemeldeten Benutzer – sie
 Ein zweiter Job stellt das Selbst-Update nach, wie die App es auslöst (`tests\update\Test-SelfUpdate.ps1`): Die gebaute
 App fragt einen Update-Server auf dem Runner, lädt ein „neueres" Setup und installiert es; ein zweites Mal scheitert
 das Setup, und die App darf es danach nicht bei jedem Start erneut versuchen.
+Ein dritter Job läuft auf einem ARM64-Windows (`tests\installer\Test-Arm64.ps1`): Dort muss das Setup die x64-Laufzeit
+an ihrem eigenen Ort finden und winget ausdrücklich die x64-Fassung holen.
 Veröffentlicht wird in der CI nichts.
 
 ## Lizenz
