@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Prüfungen, die build\release.ps1 vor dem Veröffentlichen ausführt.
 

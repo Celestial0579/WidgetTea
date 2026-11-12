@@ -1,4 +1,4 @@
-# Erzeugt Assets\WidgetTea.ico (16–256 px, PNG-komprimiert): 3x3-Kacheln in den Heatmap-Blautönen.
+﻿# Erzeugt Assets\WidgetTea.ico (16–256 px, PNG-komprimiert): 3x3-Kacheln in den Heatmap-Blautönen.
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
 

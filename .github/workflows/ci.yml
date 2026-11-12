@@ -41,6 +41,11 @@ jobs:
         shell: pwsh
         run: ./tests/release/Test-ReleaseChecks.ps1
 
+      # Dasselbe mit der PowerShell, die jedes Windows mitbringt: Dort muss release.ps1 genauso laufen.
+      - name: Release-Prüfungen unter Windows PowerShell 5.1
+        shell: powershell
+        run: ./tests/release/Test-ReleaseChecks.ps1
+
       - name: NSIS bereitstellen
         shell: pwsh
         run: |

@@ -64,6 +64,7 @@ gegen die mitveröffentlichte `.sha256` geprüft und still mit `/S /RESTART` ins
 ## Bauen & Release
 
 Voraussetzungen: .NET 10 SDK, [NSIS](https://nsis.sourceforge.io/) (`winget install NSIS.NSIS`), für Releases die `gh`-CLI.
+Die Skripte laufen unter Windows PowerShell 5.1 und unter PowerShell 7.
 
 ```powershell
 .\build\release.ps1            # baut artifacts\<version>\WidgetTea-<version>-setup.exe (+ .sha256)

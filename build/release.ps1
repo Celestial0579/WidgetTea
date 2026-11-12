@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Baut WidgetTea (framework-dependent, win-x64; der Installer prüft die .NET Desktop Runtime), erzeugt das NSIS-Setup samt SHA-256 und veröffentlicht es
   optional als GitHub-Release.

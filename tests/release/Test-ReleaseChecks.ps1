@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Prüft die Sperre von build\release.ps1 -Publish: Veröffentlicht wird nur der Stand, der auf origin als main liegt.
 
@@ -6,6 +6,7 @@
   Gebaut und veröffentlicht wird hier nichts. Das Skript legt in einem Wegwerf-Ordner eine Gegenstelle und
   Arbeitskopien an und prüft daran
 
+    0         dass jedes Skript mit Umlauten mit der UTF-8-BOM beginnt (sonst liest Windows PowerShell 5.1 es falsch),
     1 bis 7   die Prüfung selbst (build\ReleaseChecks.ps1) in den Lagen, die beim Veröffentlichen vorkommen,
     8 bis 10  dass release.ps1 sie mit -Publish vor dem Bauen aufruft und ohne -Publish nicht.
 
@@ -13,7 +14,7 @@
   und ihre Projektdatei lässt sich nicht bauen. Die Kopie kommt deshalb nie bis zum Veröffentlichen: Sie endet an
   der Sperre, an der Suche nach NSIS oder am Bauen.
 
-  Gebraucht werden nur git und PowerShell, das Skript läuft also auch unter Linux. Die eigene git-Konfiguration
+  Gebraucht werden nur git und PowerShell (Windows PowerShell 5.1 oder PowerShell 7), das Skript läuft also auch unter Linux. Die eigene git-Konfiguration
   bleibt außen vor, angefasst wird nur der Wegwerf-Ordner.
 #>
 [CmdletBinding()]
@@ -111,6 +112,24 @@ try {
     Invoke-Git @('-C', $seed, 'remote', 'add', 'origin', $origin) | Out-Null
     $a = Add-Commit $seed 'A'
     Push-Main $seed
+
+    # ---- Lesbarkeit für Windows PowerShell 5.1 ----
+
+    Step '0  Skripte mit Umlauten beginnen mit der UTF-8-BOM'
+    # Windows PowerShell 5.1 liest ein Skript ohne BOM als Windows-1252. Umlaute werden dann zu Zeichensalat, und
+    # der Gedankenstrich wird zu einem Anführungszeichen, an dem das Skript mit einem Syntaxfehler scheitert.
+    $scripts = @(Get-ChildItem -LiteralPath $root -Recurse -File -Filter '*.ps1' |
+        Where-Object { $_.FullName -notmatch '[\\/](bin|obj|artifacts)[\\/]' })
+    Check ($scripts.Count -ge 4) "PowerShell-Skripte gefunden: $($scripts.Count)"
+    $withoutBom = @()
+    foreach ($s in $scripts) {
+        $bytes = [System.IO.File]::ReadAllBytes($s.FullName)
+        $hasBom = $bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF
+        $nonAscii = [System.Text.Encoding]::GetEncoding(28591).GetString($bytes) -match '[\x80-\xFF]'
+        if ($nonAscii -and -not $hasBom) { $withoutBom += $s.FullName.Substring($root.Length + 1) }
+    }
+    foreach ($name in $withoutBom) { Write-Host "       ohne BOM: $name" }
+    Check ($withoutBom.Count -eq 0) 'Kein Skript mit Umlauten ist ohne BOM'
 
     # ---- Die Prüfung selbst ----
 
