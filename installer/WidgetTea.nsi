@@ -5,6 +5,7 @@
 ;
 ; Aufruf über build/release.ps1, oder manuell:
 ;   makensis /INPUTCHARSET UTF8 /DVERSION=1.0.0 /DSRCDIR=<publish-ordner> /DOUTFILE=<setup.exe> WidgetTea.nsi
+; (ruft beim Übersetzen New-PayloadList.ps1 über Windows PowerShell auf, für die Dateiliste der Deinstallation)
 ;
 ; Unbeaufsichtigt:  WidgetTea-…-setup.exe /S [/D=C:\Pfad]
 ; Vom Updater:      WidgetTea-…-setup.exe /S /RESTART   (wartet auf das Beenden der App und startet sie danach neu)
@@ -34,6 +35,11 @@ RequestExecutionLevel user
 !ifndef HOMEPAGE
   !define HOMEPAGE ""
 !endif
+
+; Was das Setup installiert, als Delete-Befehle für die Deinstallation: beim Übersetzen aus SRCDIR erzeugt.
+; So entfernt die Deinstallation genau die installierten Dateien, auch wenn im Programm später eine dazukommt.
+!tempfile PAYLOADLIST
+!system 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "${__FILEDIR__}\New-PayloadList.ps1" -Source "${SRCDIR}" -Out "${PAYLOADLIST}"' = 0
 
 !define APPNAME     "WidgetTea"
 !define DISPLAYNAME "WidgetTea – Gitea-Contributions auf dem Desktop"
@@ -359,13 +365,12 @@ Section "un.WidgetTea" SecUnMain
 
   Delete "$SMPROGRAMS\WidgetTea.lnk"
 
-  ; Nur löschen, wenn es wirklich unser Ordner ist.
-  ${If} ${FileExists} "$INSTDIR\${EXENAME}"
-    RMDir /r "$INSTDIR"
-  ${Else}
-    Delete "$INSTDIR\uninstall.exe"
-    RMDir "$INSTDIR"
-  ${EndIf}
+  ; Nur entfernen, was das Setup installiert hat. Der Ordner ist frei wählbar; was dort sonst noch liegt,
+  ; gehört nicht WidgetTea und bleibt. Der Ordner selbst verschwindet nur, wenn er danach leer ist.
+  !include "${PAYLOADLIST}"
+  Delete "$INSTDIR\LICENSE.txt"
+  Delete "$INSTDIR\uninstall.exe"
+  RMDir "$INSTDIR"
 
   DeleteRegKey HKCU "${UNINSTKEY}"
   DeleteRegKey HKCU "${SETTINGSKEY}"
@@ -378,6 +383,8 @@ Section /o "un.Benutzerdaten entfernen" SecUnData
 SectionEnd
 
 !insertmacro MUI_UNFUNCTION_DESCRIPTION_BEGIN
-  !insertmacro MUI_DESCRIPTION_TEXT ${SecUnMain} "Entfernt das Widget."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SecUnMain} "Entfernt das Widget. Andere Dateien im Installationsordner bleiben."
   !insertmacro MUI_DESCRIPTION_TEXT ${SecUnData} "Löscht zusätzlich Einstellungen, gespeichertes Token und Cache."
 !insertmacro MUI_UNFUNCTION_DESCRIPTION_END
+
+!delfile "${PAYLOADLIST}"
