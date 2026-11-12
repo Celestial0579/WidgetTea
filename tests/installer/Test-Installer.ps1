@@ -24,6 +24,8 @@
     8  /S /RESTART ohne passende Laufzeit, und niemand antwortet: Nach dem Zeitablauf läuft das Widget wieder,
        während der Hinweis noch auf dem Schirm steht; automatische Updates sind aus wie bei „Nein“.
     9  Deinstallation mit fremden Dateien im Ordner: Weg ist nur, was das Setup installiert hat.
+   10  Fremde Programme neben dem Setup, die wie Hilfsprogramme von Windows heißen (cmd.exe, taskkill.exe, …),
+       werden nicht ausgeführt. Als Gegenprobe startet das veröffentlichte 1.0.0 sie noch.
 
   Für 3, 4, 6 und 8 wird das Setup ein zweites Mal gebaut, mit einer Mindestversion der Laufzeit, die es nicht
   gibt (/DDOTNET_MINPATCH=999), und mit kurzem Zeitablauf der Nachfrage. So lässt sich „Laufzeit fehlt“ auf
@@ -173,10 +175,13 @@ function Invoke-Setup {
         [string]$Exe,
         [string[]]$Arguments,
         [System.Collections.Specialized.OrderedDictionary]$Answers = [ordered]@{},
-        [int]$TimeoutSec = 300
+        [int]$TimeoutSec = 300,
+        [string]$WorkingDirectory   # aktueller Ordner des Setups; beim Doppelklick ist es der Ordner der Setup-Datei
     )
     Write-Host "   >   $(Split-Path $Exe -Leaf) $($Arguments -join ' ')"
-    $p = Start-Process -FilePath $Exe -ArgumentList $Arguments -PassThru
+    $start = @{ FilePath = $Exe; ArgumentList = $Arguments; PassThru = $true }
+    if ($WorkingDirectory) { $start.WorkingDirectory = $WorkingDirectory }
+    $p = Start-Process @start
     $null = $p.Handle   # sonst ist ExitCode nach dem Ende leer
     $seen = [System.Collections.Generic.List[string]]::new()
     $seenAt = @{}
@@ -487,5 +492,125 @@ Check (-not (Test-Path $regKey)) 'Die Registry-Einträge sind weg'
 Check (-not (Get-ItemProperty -Path $runKey -Name 'WidgetTea' -ErrorAction SilentlyContinue)) 'Der Autostart ist weg'
 Check (-not (Test-Path (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\WidgetTea.lnk'))) 'Die Verknüpfung im Startmenü ist weg'
 Check (Test-Path -LiteralPath $settingsFile) 'Die Einstellungen des Nutzers bleiben liegen (Benutzerdaten nicht abgewählt)'
+
+# ---------------------------------------------------------------- 10 Fremde Programme neben dem Setup
+
+Step '10 Fremde Programme neben dem Setup werden nicht ausgeführt'
+# Das Setup ruft Hilfsprogramme von Windows auf. Nennt es sie nur beim Namen, sucht Windows zuerst im Ordner des
+# Setups und im aktuellen Ordner, und beim Doppelklick ist das der Ordner, in dem die Setup-Datei liegt. Die Köder
+# hier sind harmlose Programme mit den Namen dieser Hilfsprogramme: Sie schreiben nur auf, dass sie gestartet wurden.
+$csc = Join-Path $env:SystemRoot 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
+if (-not (Test-Path $csc)) { throw 'csc.exe von .NET Framework 4 fehlt, die Köder lassen sich nicht bauen' }
+$baitLog = Join-Path $work 'koeder-gelaufen.txt'
+$baitExe = Join-Path $work 'koeder.exe'
+$sleeperExe = Join-Path $work 'schlaefer.exe'
+Set-Content -LiteralPath (Join-Path $work 'koeder.cs') -Encoding ascii -Value @'
+using System;
+using System.Diagnostics;
+using System.IO;
+public static class Koeder
+{
+    public static int Main(string[] args)
+    {
+        try
+        {
+            File.AppendAllText(Environment.GetEnvironmentVariable("WIDGETTEA_KOEDER"),
+                Process.GetCurrentProcess().MainModule.FileName + " " + string.Join(" ", args) + Environment.NewLine);
+        }
+        catch { }
+        return 1;
+    }
+}
+'@
+Set-Content -LiteralPath (Join-Path $work 'schlaefer.cs') -Encoding ascii -Value @'
+public static class Schlaefer
+{
+    public static void Main() { System.Threading.Thread.Sleep(600000); }
+}
+'@
+& $csc /nologo "/out:$baitExe" (Join-Path $work 'koeder.cs') | Out-Null
+if ($LASTEXITCODE) { throw 'Der Köder ließ sich nicht übersetzen' }
+& $csc /nologo "/out:$sleeperExe" (Join-Path $work 'schlaefer.cs') | Out-Null
+if ($LASTEXITCODE) { throw 'Der Schläfer ließ sich nicht übersetzen' }
+
+# Ordner mit einer Kopie des Setups und den Ködern daneben; liefert den Pfad der Kopie.
+function New-BaitFolder([string]$Name, [string]$SetupFile) {
+    $folder = Join-Path $work $Name
+    New-Item -ItemType Directory -Force $folder | Out-Null
+    Copy-Item -LiteralPath $SetupFile -Destination $folder
+    foreach ($n in 'cmd.exe', 'tasklist.exe', 'find.exe', 'taskkill.exe', 'where.exe', 'winget.exe') {
+        Copy-Item -LiteralPath $baitExe -Destination (Join-Path $folder $n)
+    }
+    Join-Path $folder (Split-Path $SetupFile -Leaf)
+}
+
+function Show-BaitLog {
+    if (Test-Path -LiteralPath $baitLog) { Get-Content -LiteralPath $baitLog | ForEach-Object { Write-Host "       Köder: $_" } }
+}
+
+function Wait-Gone([string]$Path) {
+    $deadline = (Get-Date).AddSeconds(60)
+    while ((Test-Path -LiteralPath $Path) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 500 }
+}
+
+$env:WIDGETTEA_KOEDER = $baitLog
+$sleeper = $null
+try {
+    Start-Process -FilePath $baitExe -ArgumentList 'Selbsttest' -Wait -WindowStyle Hidden
+    Check ((Test-Path -LiteralPath $baitLog) -and (Get-Content -LiteralPath $baitLog -Raw) -like '*Selbsttest*') 'Der Köder meldet sich, wenn er gestartet wird'
+    Remove-Item -LiteralPath $baitLog
+
+    # Gegenprobe: Das veröffentlichte Setup ruft cmd.exe und taskkill noch ohne Pfad auf. Schlägt der Köder dort
+    # nicht an, taugt diese Stufe nicht als Prüfung.
+    $oldBait = New-BaitFolder 'koeder-alt' $oldSetup
+    $oldTarget = Join-Path $work 'koeder-alt-ziel'
+    $r = Invoke-Setup $oldBait @('/S', "/D=$oldTarget") -WorkingDirectory (Split-Path $oldBait)
+    Check ($r.ExitCode -eq 0) "Exitcode 0 (war $($r.ExitCode))"
+    Show-BaitLog
+    Check (Test-Path -LiteralPath $baitLog) "Gegenprobe: Das veröffentlichte Setup $oldVersion startet einen Köder"
+    Remove-Item -LiteralPath $baitLog
+    Start-Process -FilePath (Join-Path $oldTarget 'uninstall.exe') -ArgumentList '/S' -Wait
+    Wait-Gone $oldTarget
+
+    # Das gebaute Setup, frische Installation.
+    $newBait = New-BaitFolder 'koeder-neu' $setup
+    $target = Join-Path $work 'koeder-neu-ziel'
+    $r = Invoke-Setup $newBait @('/S', "/D=$target") -WorkingDirectory (Split-Path $newBait)
+    Check ($r.ExitCode -eq 0) "Exitcode 0 (war $($r.ExitCode))"
+    Check (Test-Path (Join-Path $target 'WidgetTea.exe')) 'Die Installation ist vollständig'
+    Show-BaitLog
+    Check (-not (Test-Path -LiteralPath $baitLog)) 'Das Setup hat keinen Köder gestartet'
+
+    # Dasselbe, während im Zielordner ein Programm namens WidgetTea.exe läuft. Jetzt muss das Setup es beenden,
+    # ruft also auch taskkill auf.
+    Copy-Item -LiteralPath $sleeperExe -Destination (Join-Path $target 'WidgetTea.exe') -Force
+    $sleeper = Start-Process -FilePath (Join-Path $target 'WidgetTea.exe') -PassThru -WindowStyle Hidden
+    $null = $sleeper.Handle
+    Start-Sleep -Seconds 1
+    Check (-not $sleeper.HasExited) 'Im Zielordner läuft ein Programm namens WidgetTea.exe'
+    $r = Invoke-Setup $newBait @('/S', "/D=$target") -WorkingDirectory (Split-Path $newBait)
+    Check ($r.ExitCode -eq 0) "Exitcode 0 (war $($r.ExitCode))"
+    Check ($sleeper.WaitForExit(5000)) 'Das Setup hat das laufende Programm beendet'
+    Check ((Get-Item (Join-Path $target 'WidgetTea.exe')).VersionInfo.ProductVersion -like "$version*") 'Im Zielordner liegt wieder das echte Programm'
+    Show-BaitLog
+    Check (-not (Test-Path -LiteralPath $baitLog)) 'Auch dabei hat das Setup keinen Köder gestartet'
+
+    Start-Process -FilePath (Join-Path $target 'uninstall.exe') -ArgumentList '/S' -Wait
+    Wait-Gone $target
+    Check (-not (Test-Path $target)) 'Die Deinstallation entfernt den Ordner'
+    Check (-not (Test-Path $regKey)) 'Die Registry-Einträge sind weg'
+}
+finally {
+    Remove-Item Env:WIDGETTEA_KOEDER -ErrorAction SilentlyContinue
+    if ($sleeper -and -not $sleeper.HasExited) { Stop-Process -Id $sleeper.Id -Force -ErrorAction SilentlyContinue }
+}
+
+# Und im Quelltext: Jeder Aufruf eines Programms nennt es mit vollem Pfad.
+$calls = @(Get-ChildItem -LiteralPath (Join-Path $root 'installer') -Recurse -File -Include '*.nsi', '*.nsh' |
+    Select-String -Pattern '^\s*(nsExec::\w+|Exec|ExecWait)\s+''(.+)''\s*$')
+Check ($calls.Count -ge 4) "Aufrufe von Programmen im Quelltext des Setups gefunden: $($calls.Count)"
+$bare = @($calls | Where-Object { $_.Matches[0].Groups[2].Value -notmatch '^"\$(SYSDIR|WINDIR|LOCALAPPDATA)\\' })
+foreach ($b in $bare) { Write-Host "       $($b.Filename):$($b.LineNumber): $($b.Line.Trim())" }
+Check ($bare.Count -eq 0) 'Jeder davon nennt das Programm mit vollem Pfad'
 
 Write-Host "`nAlle Installer-Prüfungen bestanden." -ForegroundColor Green
