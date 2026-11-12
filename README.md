@@ -84,7 +84,7 @@ Bei jedem Pull Request baut die CI (`.github/workflows/ci.yml`) App und Setup, l
 das Setup still: Neuinstallation, Update vom veröffentlichten 1.0.0, Abbruch ohne passende Laufzeit, das abgelehnte und das
 unbeantwortete Selbst-Update, die Deinstallation aus einem Ordner mit fremden Dateien und dass das Setup keine fremden
 Programme startet, die neben ihm liegen und wie Hilfsprogramme von Windows heißen, und dass es die laufende App an ihr
-selbst erkennt und nicht am Programmnamen. Das gebaute Setup hängt als Artefakt am Lauf. Die Installer-Prüfungen (`tests\installer\Test-Installer.ps1`)
+selbst erkennt und nicht am Programmnamen, und dass ein Update nur die Dateien der vorigen Fassung entfernt. Das gebaute Setup hängt als Artefakt am Lauf. Die Installer-Prüfungen (`tests\installer\Test-Installer.ps1`)
 installieren und deinstallieren WidgetTea für den angemeldeten Benutzer – sie gehören in die CI, nicht auf den eigenen Rechner.
 Veröffentlicht wird in der CI nichts.
 
