@@ -823,18 +823,19 @@ Step '13 Scheitert die Installation beim Selbst-Update, startet das Setup die Ap
 # danach die App starten. Der Aufruf trifft hier den Stellvertreter: Von ihm läuft dann eine zweite Instanz.
 $target = Join-Path $work 'neustart'
 $targetExe = Join-Path $target 'WidgetTea.exe'
-function Get-TargetProcesses { @(Get-Process -Name 'WidgetTea' -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $targetExe }) }
+# Beim Aufruf in @( ) setzen: Eine Funktion gibt ein einzelnes Ergebnis nicht als Liste zurück.
+function Get-TargetProcesses { Get-Process -Name 'WidgetTea' -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $targetExe } }
 try {
     $r = Invoke-Setup $setup @('/S', "/D=$target")
     Check ($r.ExitCode -eq 0) "Exitcode 0 (war $($r.ExitCode))"
     Start-StandIn $sleeperExe $target | Out-Null
-    Check ((Get-TargetProcesses).Count -eq 1) 'Im Zielordner läuft die App (ein Stellvertreter)'
+    Check (@(Get-TargetProcesses).Count -eq 1) 'Im Zielordner läuft die App (ein Stellvertreter)'
 
     $r = Invoke-Setup $setupNoKill @('/S', '/RESTART', "/D=$target") -TimeoutSec 180
     Check ($r.ExitCode -eq 2) "Exitcode 2, abgebrochen (war $($r.ExitCode))"
     $deadline = (Get-Date).AddSeconds(30)
-    while ((Get-TargetProcesses).Count -lt 2 -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 500 }
-    Check ((Get-TargetProcesses).Count -ge 2) 'Das Setup hat die App nach dem Scheitern wieder gestartet'
+    while (@(Get-TargetProcesses).Count -lt 2 -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 500 }
+    Check (@(Get-TargetProcesses).Count -ge 2) 'Das Setup hat die App nach dem Scheitern wieder gestartet'
 }
 finally {
     Get-TargetProcesses | ForEach-Object { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue }
