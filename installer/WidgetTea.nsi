@@ -223,6 +223,10 @@ FunctionEnd
 ; sich dafür – ohne Eingriff also endlos im Minutentakt. Deshalb: automatische Updates ausschalten,
 ; Bescheid sagen, alte Version wieder starten. Das Update lässt sich über das Tray-Symbol nachholen.
 Function UpdateDeclined
+  ; /RESTART ohne vorhandene Installation (von Hand aufgerufen): nichts auszuschalten und nichts zu starten.
+  ${IfNot} ${FileExists} "$INSTDIR\${EXENAME}"
+    Return
+  ${EndIf}
   Call PauseAutoUpdate
   ${If} $R3 == 1
     MessageBox MB_OK|MB_ICONINFORMATION|MB_TOPMOST \
