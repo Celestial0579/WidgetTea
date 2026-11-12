@@ -13,6 +13,8 @@
 ; Wahlweise:
 ;   DOTNET_ASK_TIMEOUT    Sekunden, die „Jetzt installieren?“ im stillen Modus auf eine Antwort wartet (Vorgabe 120)
 ;   DOTNET_RETRY_TIMEOUT  dasselbe für „Wiederholen/Abbrechen“ nach dem Download im Browser (Vorgabe 1800)
+;   DOTNET_WINGET_EXE     wo winget liegt (Vorgabe: sein fester Ort im Benutzerprofil); anders nur für Prüfungen
+; Ist DOTNET_URL leer, öffnet sich kein Browser (ebenfalls nur für Prüfungen).
 ; Benötigt LogicLib.nsh, x64.nsh und das System-Plugin.
 ;
 ; Aufruf in .onInit:
@@ -33,6 +35,11 @@
   !define DOTNET_RETRY_TIMEOUT 1800
 !endif
 !define /math DOTNET_RETRY_MINUTES ${DOTNET_RETRY_TIMEOUT} / 60
+; winget immer mit vollem Pfad und nie über den Suchpfad: Beim bloßen Namen käme ein gleichnamiges Programm im
+; Ordner des Setups oder im aktuellen Ordner zuerst zum Zug.
+!ifndef DOTNET_WINGET_EXE
+  !define DOTNET_WINGET_EXE "$LOCALAPPDATA\Microsoft\WindowsApps\winget.exe"
+!endif
 
 Var DotnetAsk
 Var DotnetFound
@@ -162,7 +169,7 @@ Function DotnetEnsure
     ; Aufgerufen wird es über seinen festen Ort im Benutzerprofil und ohne cmd, nicht über den Suchpfad: Beim
     ; bloßen Namen käme ein gleichnamiges Programm im Ordner des Setups oder im aktuellen Ordner zuerst zum Zug.
     ; --architecture x64: Auf einem ARM64-Windows nähme winget sonst die ARM64-Laufzeit, gesucht wird hier aber x64.
-    nsExec::ExecToStack '"$LOCALAPPDATA\Microsoft\WindowsApps\winget.exe" --version'
+    nsExec::ExecToStack '"${DOTNET_WINGET_EXE}" --version'
     Pop $1                         ; Exitcode, oder "error", wenn es winget dort nicht gibt
     Pop $0
     ${If} $1 == 0
@@ -170,7 +177,7 @@ Function DotnetEnsure
       ; Windows zeigt sie dann oft nicht von selbst, sondern nur als blinkendes Schild in der Taskleiste – das
       ; muss hier stehen. Das Fenster ist klein: oben zwei Zeilen zu etwa 35 Zeichen, unten eine kurze.
       Banner::show /NOUNLOAD /set 76 "Windows-Abfrage bitte bestätigen –$\r$\ndas Schild in der Taskleiste blinkt." "Installation läuft …"
-      nsExec::ExecToStack '"$LOCALAPPDATA\Microsoft\WindowsApps\winget.exe" install --id ${DOTNET_WINGET} --exact --source winget --architecture x64 --silent --accept-package-agreements --accept-source-agreements --disable-interactivity'
+      nsExec::ExecToStack '"${DOTNET_WINGET_EXE}" install --id ${DOTNET_WINGET} --exact --source winget --architecture x64 --silent --accept-package-agreements --accept-source-agreements --disable-interactivity'
       Pop $1
       Pop $0
       Banner::destroy
@@ -181,7 +188,9 @@ Function DotnetEnsure
     ${EndIf}
 
     ; Ersatzweise: offizielles Setup im Browser laden lassen und auf den Benutzer warten
-    ExecShell "open" "${DOTNET_URL}"
+    !if "${DOTNET_URL}" != ""
+      ExecShell "open" "${DOTNET_URL}"
+    !endif
     StrCpy $1 "Das Setup der ${DOTNET_NAME} wird von Microsoft heruntergeladen.$\r$\nBitte ausführen und danach auf „Wiederholen“ klicken."
     ${If} ${Silent}
       ; Auch hier nicht ewig warten – aber lange genug, um die Laufzeit in Ruhe zu laden und zu installieren.

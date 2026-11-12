@@ -32,6 +32,9 @@
    12  Dateien, die in einer neuen Fassung wegfallen, verschwinden beim Update; fremde Dateien bleiben, und eine
        Dateiliste, die aus dem Installationsordner hinausweist, wird nicht befolgt.
    13  Scheitert die Installation beim Selbst-Update (/S /RESTART), startet das Setup die App trotzdem wieder.
+   14  „Ja" auf die Nachfrage nach der Laufzeit: ohne winget führt der Weg zu „Wiederholen/Abbrechen", das im
+       stillen Modus nicht ewig wartet; mit winget ruft das Setup es auf, und scheitert die Installation
+       (Paket, das es nicht gibt), geht es ebenfalls dorthin.
 
   Für 3, 4, 6 und 8 wird das Setup ein zweites Mal gebaut, mit einer Mindestversion der Laufzeit, die es nicht
   gibt (/DDOTNET_MINPATCH=999), und mit kurzem Zeitablauf der Nachfrage. So lässt sich „Laufzeit fehlt“ auf
@@ -636,9 +639,11 @@ finally {
 $calls = @(Get-ChildItem -LiteralPath (Join-Path $root 'installer') -Recurse -File -Include '*.nsi', '*.nsh' |
     Select-String -Pattern '^\s*(nsExec::\w+|Exec|ExecWait)\s+''(.+)''\s*$')
 Check ($calls.Count -ge 4) "Aufrufe von Programmen im Quelltext des Setups gefunden: $($calls.Count)"
-$bare = @($calls | Where-Object { $_.Matches[0].Groups[2].Value -notmatch '^"\$(SYSDIR|WINDIR|LOCALAPPDATA)\\' })
+$bare = @($calls | Where-Object { $_.Matches[0].Groups[2].Value -notmatch '^"(\$(SYSDIR|WINDIR|LOCALAPPDATA)\\|\$\{DOTNET_WINGET_EXE\}")' })
 foreach ($b in $bare) { Write-Host "       $($b.Filename):$($b.LineNumber): $($b.Line.Trim())" }
 Check ($bare.Count -eq 0) 'Jeder davon nennt das Programm mit vollem Pfad'
+$wingetDefault = Select-String -LiteralPath (Join-Path $root 'installer\DotnetRuntime.nsh') -Pattern '^\s*!define DOTNET_WINGET_EXE "(.+)"' | Select-Object -First 1
+Check ($wingetDefault -and $wingetDefault.Matches[0].Groups[1].Value -like '$LOCALAPPDATA\*') 'winget steht in der Vorgabe mit vollem Pfad'
 
 # winget ruft das Setup über seinen festen Ort im Benutzerprofil auf. Ob nsExec es von dort starten kann, zeigt ein
 # Probe-Setup mit genau diesem Aufruf. Gibt es winget auf diesem Rechner nicht, muss nsExec das als "error" melden
@@ -823,18 +828,19 @@ Step '13 Scheitert die Installation beim Selbst-Update, startet das Setup die Ap
 # danach die App starten. Der Aufruf trifft hier den Stellvertreter: Von ihm läuft dann eine zweite Instanz.
 $target = Join-Path $work 'neustart'
 $targetExe = Join-Path $target 'WidgetTea.exe'
-function Get-TargetProcesses { @(Get-Process -Name 'WidgetTea' -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $targetExe }) }
+# Beim Aufruf in @( ) setzen: Eine Funktion gibt ein einzelnes Ergebnis nicht als Liste zurück.
+function Get-TargetProcesses { Get-Process -Name 'WidgetTea' -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $targetExe } }
 try {
     $r = Invoke-Setup $setup @('/S', "/D=$target")
     Check ($r.ExitCode -eq 0) "Exitcode 0 (war $($r.ExitCode))"
     Start-StandIn $sleeperExe $target | Out-Null
-    Check ((Get-TargetProcesses).Count -eq 1) 'Im Zielordner läuft die App (ein Stellvertreter)'
+    Check (@(Get-TargetProcesses).Count -eq 1) 'Im Zielordner läuft die App (ein Stellvertreter)'
 
     $r = Invoke-Setup $setupNoKill @('/S', '/RESTART', "/D=$target") -TimeoutSec 180
     Check ($r.ExitCode -eq 2) "Exitcode 2, abgebrochen (war $($r.ExitCode))"
     $deadline = (Get-Date).AddSeconds(30)
-    while ((Get-TargetProcesses).Count -lt 2 -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 500 }
-    Check ((Get-TargetProcesses).Count -ge 2) 'Das Setup hat die App nach dem Scheitern wieder gestartet'
+    while (@(Get-TargetProcesses).Count -lt 2 -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 500 }
+    Check (@(Get-TargetProcesses).Count -ge 2) 'Das Setup hat die App nach dem Scheitern wieder gestartet'
 }
 finally {
     Get-TargetProcesses | ForEach-Object { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue }
@@ -845,5 +851,64 @@ Check ($r.ExitCode -eq 0) "Exitcode 0 (war $($r.ExitCode))"
 Start-Process -FilePath (Join-Path $target 'uninstall.exe') -ArgumentList '/S' -Wait
 Wait-Gone $target
 Check (-not (Test-Path $target)) 'Die Deinstallation entfernt den Ordner'
+
+# ---------------------------------------------------------------- 14 Der Weg nach „Ja"
+
+Step '14 Laufzeit fehlt, Antwort Ja: winget oder der Ausweichweg'
+# Zwei weitere Testfassungen. Beide verlangen eine Laufzeit, die es nicht gibt, warten kurz und öffnen keinen
+# Browser. Der einen fehlt winget (sie sucht es an einem Ort, den es nicht gibt), die andere soll über winget ein
+# Paket installieren, das es nicht gibt. Am Rechner ändert sich dabei nichts.
+$retryTimeout = 10
+$common = @('/V2', '/INPUTCHARSET', 'UTF8', "/DVERSION=$version", "/DSRCDIR=$publishDir", '/DDOTNET_MINPATCH=999',
+    "/DDOTNET_ASK_TIMEOUT=$askTimeout", "/DDOTNET_RETRY_TIMEOUT=$retryTimeout", '/DDOTNET_URL=')
+$setupNoWinget = Join-Path $work 'WidgetTea-ohne-winget-setup.exe'
+& $makensis @common "/DOUTFILE=$setupNoWinget" '/DDOTNET_WINGET_EXE=C:\gibt-es-nicht\winget.exe' (Join-Path $root 'installer\WidgetTea.nsi')
+if ($LASTEXITCODE) { throw 'makensis (Testfassung ohne winget) fehlgeschlagen' }
+$setupWingetFails = Join-Path $work 'WidgetTea-winget-scheitert-setup.exe'
+& $makensis @common "/DOUTFILE=$setupWingetFails" '/DDOTNET_WINGET=WidgetTea.Pruefung.GibtEsNicht' (Join-Path $root 'installer\WidgetTea.nsi')
+if ($LASTEXITCODE) { throw 'makensis (Testfassung mit unbekanntem Paket) fehlgeschlagen' }
+
+$nowhere = Join-Path $work 'nirgends'
+$ask = 'Jetzt installieren?'
+$banner = 'Windows-Abfrage bitte'
+$retry = 'wird von Microsoft heruntergeladen'
+
+# a) Ohne winget: kein Hinweis auf die Windows-Abfrage, gleich „Wiederholen/Abbrechen".
+$r = Invoke-Setup $setupNoWinget @('/S', '/RESTART', "/D=$nowhere") ([ordered]@{
+    $ask    = @('Yes', 'Ja')
+    $banner = @()
+    $retry  = @('Cancel', 'Abbrechen')
+})
+Check ($r.ExitCode -eq 3) "Exitcode 3 (war $($r.ExitCode))"
+Check ($r.Seen -contains $retry) 'Nach Ja kam „Wiederholen/Abbrechen"'
+Check (-not ($r.Seen -contains $banner)) 'winget wurde nicht aufgerufen (es fehlt)'
+Check (-not (Test-Path $nowhere)) 'Installiert wurde nichts'
+
+# b) Dasselbe, und niemand antwortet auf „Wiederholen/Abbrechen": Es wartet nicht ewig.
+$r = Invoke-Setup $setupNoWinget @('/S', '/RESTART', "/D=$nowhere") ([ordered]@{
+    $ask   = @('Yes', 'Ja')
+    $retry = @()
+}) -TimeoutSec 120
+Check ($r.ExitCode -eq 3) "Exitcode 3 (war $($r.ExitCode))"
+$stood = [int]((Get-Date) - $r.SeenAt[$retry]).TotalSeconds
+Check ($stood -ge ($retryTimeout - 2) -and $stood -le ($retryTimeout + 20)) "Wiederholen/Abbrechen verschwand nach dem Zeitablauf von selbst (stand etwa $stood s, eingestellt $retryTimeout s)"
+Check (-not (Test-Path $nowhere)) 'Installiert wurde nichts'
+
+# c) Mit winget: Das Setup ruft es auf (der Hinweis auf die Windows-Abfrage steht währenddessen da). Das Paket gibt
+#    es nicht, also geht es danach zu „Wiederholen/Abbrechen".
+if (Test-Path -LiteralPath (Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\winget.exe')) {
+    $r = Invoke-Setup $setupWingetFails @('/S', '/RESTART', "/D=$nowhere") ([ordered]@{
+        $ask    = @('Yes', 'Ja')
+        $banner = @()
+        $retry  = @('Cancel', 'Abbrechen')
+    }) -TimeoutSec 600
+    Check ($r.ExitCode -eq 3) "Exitcode 3 (war $($r.ExitCode))"
+    Check ($r.Seen -contains $banner) 'Das Setup hat winget aufgerufen und währenddessen den Hinweis gezeigt'
+    Check ($r.Seen -contains $retry) 'Nach dem Scheitern von winget kam „Wiederholen/Abbrechen"'
+    Write-Host "       winget lief etwa $([int]($r.SeenAt[$retry] - $r.SeenAt[$banner]).TotalSeconds) s"
+    Check (-not (Test-Path $nowhere)) 'Installiert wurde nichts'
+} else {
+    Note 'winget fehlt auf diesem Rechner, der Aufruf über winget ist hier nicht zu prüfen'
+}
 
 Write-Host "`nAlle Installer-Prüfungen bestanden." -ForegroundColor Green

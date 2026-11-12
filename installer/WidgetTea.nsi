@@ -77,8 +77,14 @@ RequestExecutionLevel user
   !define DOTNET_MINPATCH 14
 !endif
 !define DOTNET_NAME     ".NET Desktop Runtime"
-!define DOTNET_WINGET   "Microsoft.DotNet.DesktopRuntime.10"
-!define DOTNET_URL      "https://aka.ms/dotnet/10.0/windowsdesktop-runtime-win-x64.exe"
+; Paket und Adresse sind wie die Mindestversion von außen überschreibbar, nur für die Installer-Prüfungen:
+; So lässt sich der Weg über winget mit einem Paket gehen, das es nicht gibt, und ohne dass sich ein Browser öffnet.
+!ifndef DOTNET_WINGET
+  !define DOTNET_WINGET "Microsoft.DotNet.DesktopRuntime.10"
+!endif
+!ifndef DOTNET_URL
+  !define DOTNET_URL    "https://aka.ms/dotnet/10.0/windowsdesktop-runtime-win-x64.exe"
+!endif
 ; Nachfragen mit Zeitablauf tragen denselben Fenstertitel wie die übrigen Meldungen des Setups.
 !define SETUPCAPTION    "WidgetTea ${VERSION} – Installation"
 !define DOTNET_CAPTION  "${SETUPCAPTION}"
