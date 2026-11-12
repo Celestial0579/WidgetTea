@@ -22,7 +22,9 @@ Sicherheitsupdates der Laufzeit kommen danach über Windows Update.
 Wer die Nachfrage ablehnt, behält die bisherige Version: Geprüft wird, bevor das Setup irgendetwas anfasst.
 Nach einem abgelehnten Selbst-Update schaltet das Setup „Updates automatisch installieren“ aus, weil WidgetTea
 dasselbe Update sonst nach jedem Start erneut lüde. Das Update lässt sich über das Tray-Symbol nachholen,
-danach sind automatische Updates wieder an.
+danach sind automatische Updates wieder an. Bleibt die Nachfrage bei einem Selbst-Update zwei Minuten
+unbeantwortet, verfährt das Setup genauso: WidgetTea läuft in der bisherigen Version weiter, und ein Hinweis
+wartet auf dem Bildschirm.
 
 Beim ersten Start öffnet sich das Einstellungsfenster:
 
@@ -32,6 +34,9 @@ Gitea-Adresse, Benutzername und Access-Token eintragen (Gitea → Einstellungen 
 mit „Verbindung testen“ prüfen und speichern.
 
 Unbeaufsichtigt: `WidgetTea-<version>-setup.exe /S`. Fehlt dabei die Laufzeit, endet das Setup ohne Nachfrage mit Exitcode 3 und ändert nichts.
+
+Die Deinstallation entfernt genau die Dateien, die das Setup installiert hat. Liegt im Installationsordner noch etwas anderes,
+bleibt es samt Ordner stehen. Einstellungen, Token und Cache bleiben ebenfalls, solange „Benutzerdaten entfernen“ nicht gewählt ist.
 
 ## Datenablage
 
@@ -75,8 +80,8 @@ dotnet test tests\WidgetTea.Tests\WidgetTea.Tests.csproj   # Unit-Tests des Upda
 ```
 
 Bei jedem Pull Request baut die CI (`.github/workflows/ci.yml`) App und Setup, lässt die Unit-Tests laufen und prüft
-das Setup still: Neuinstallation, Update vom veröffentlichten 1.0.0, Abbruch ohne passende Laufzeit und das abgelehnte
-Selbst-Update. Das gebaute Setup hängt als Artefakt am Lauf. Die Installer-Prüfungen (`tests\installer\Test-Installer.ps1`)
+das Setup still: Neuinstallation, Update vom veröffentlichten 1.0.0, Abbruch ohne passende Laufzeit, das abgelehnte und das
+unbeantwortete Selbst-Update sowie die Deinstallation aus einem Ordner mit fremden Dateien. Das gebaute Setup hängt als Artefakt am Lauf. Die Installer-Prüfungen (`tests\installer\Test-Installer.ps1`)
 installieren und deinstallieren WidgetTea für den angemeldeten Benutzer – sie gehören in die CI, nicht auf den eigenen Rechner.
 Veröffentlicht wird in der CI nichts.
 
