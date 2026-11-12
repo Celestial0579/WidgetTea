@@ -164,7 +164,10 @@ Function DotnetEnsure
     Pop $1
     Pop $0
     ${If} $1 == 0
-      Banner::show /NOUNLOAD /set 76 "${DOTNET_NAME} wird installiert …" "Bitte die Windows-Abfrage bestätigen."
+      ; Die Abfrage der Benutzerkontensteuerung stellt nicht das Setup, sondern das Laufzeit-Setup hinter winget.
+      ; Windows zeigt sie dann oft nicht von selbst, sondern nur als blinkendes Schild in der Taskleiste – das
+      ; muss hier stehen. Das Fenster ist klein: oben zwei Zeilen zu etwa 35 Zeichen, unten eine kurze.
+      Banner::show /NOUNLOAD /set 76 "Windows-Abfrage bitte bestätigen –$\r$\ndas Schild in der Taskleiste blinkt." "Installation läuft …"
       nsExec::ExecToStack 'cmd.exe /C winget install --id ${DOTNET_WINGET} --exact --source winget --architecture x64 --silent --accept-package-agreements --accept-source-agreements --disable-interactivity'
       Pop $1
       Pop $0

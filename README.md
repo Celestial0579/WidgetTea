@@ -17,6 +17,7 @@ Installiert wird nur für das eigene Benutzerkonto (`%LOCALAPPDATA%\Programs\Wid
 Voraussetzung ist die [.NET Desktop Runtime 10](https://dotnet.microsoft.com/download/dotnet/10.0) (x64, mindestens 10.0.14). Fehlt sie oder ist sie veraltet,
 fragt das Setup – auch bei einem Selbst-Update – vor der Installation nach und installiert sie per `winget` (Adminrechte nötig);
 wo `winget` fehlt oder scheitert, öffnet es den Download von Microsoft.
+Die Abfrage der Benutzerkontensteuerung zeigt Windows dabei oft nicht von selbst, sondern nur als blinkendes Schild in der Taskleiste.
 Sicherheitsupdates der Laufzeit kommen danach über Windows Update.
 
 Wer die Nachfrage ablehnt, behält die bisherige Version: Geprüft wird, bevor das Setup irgendetwas anfasst.
