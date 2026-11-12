@@ -1,17 +1,19 @@
-<#
+﻿<#
 .SYNOPSIS
   Baut WidgetTea (framework-dependent, win-x64; der Installer prüft die .NET Desktop Runtime), erzeugt das NSIS-Setup samt SHA-256 und veröffentlicht es
   optional als GitHub-Release.
 
 .DESCRIPTION
   Versionsnummer und Update-Repository kommen aus WidgetTea.csproj (<Version>, <UpdateRepository>).
-  Für ein neues Release: <Version> erhöhen, committen, pushen, dann
+  Für ein neues Release: <Version> erhöhen, committen, nach main bringen, dann
 
     .\build\release.ps1 -Publish
 
   -Publish legt den Tag v<Version> an, pusht ihn und erstellt per gh-CLI das Release mit beiden Assets:
     WidgetTea-<ver>-setup.exe
     WidgetTea-<ver>-setup.exe.sha256
+  Veröffentlicht wird nur der Stand, der auf origin als main liegt: Ist ein anderer Commit ausgecheckt (ein Zweig,
+  ein nicht aktualisierter oder ein noch nicht gepushter Stand), bricht -Publish vor dem Bauen ab.
   Ein Gitea-Spiegel des Repos übernimmt Code und Tags beim nächsten Abgleich,
   die Release-Assets nicht – der Updater lädt immer von GitHub.
 
@@ -34,6 +36,13 @@ if (-not $Repository) {
 }
 $Repository = "$Repository".TrimEnd('/')
 if (-not $version) { throw "<Version> fehlt in WidgetTea.csproj" }
+
+if ($Publish) {
+    # Veröffentlicht wird nur der Stand, der auf origin als main liegt, und geprüft wird das vor dem Bauen. Sonst bekäme
+    # ein vergessener Zweig oder ein nicht aktualisierter Stand den Tag, und jede Installation holte ihn sich per Selbst-Update.
+    . (Join-Path $PSScriptRoot 'ReleaseChecks.ps1')
+    Assert-HeadIsRemoteBranch -Root $root -Remote origin -Branch main
+}
 
 $makensis = @("${env:ProgramFiles(x86)}\NSIS\makensis.exe", "$env:ProgramFiles\NSIS\makensis.exe") |
     Where-Object { Test-Path $_ } | Select-Object -First 1

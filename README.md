@@ -68,13 +68,16 @@ Tray-Menü lässt sich das Update jederzeit von Hand starten.
 ## Bauen & Release
 
 Voraussetzungen: .NET 10 SDK, [NSIS](https://nsis.sourceforge.io/) (`winget install NSIS.NSIS`), für Releases die `gh`-CLI.
+Die Skripte laufen unter Windows PowerShell 5.1 und unter PowerShell 7.
 
 ```powershell
 .\build\release.ps1            # baut artifacts\<version>\WidgetTea-<version>-setup.exe (+ .sha256)
 .\build\release.ps1 -Publish   # zusätzlich Tag v<version> pushen und GitHub-Release anlegen
 ```
 
-Für ein neues Release vorher `<Version>` in `WidgetTea.csproj` erhöhen und committen.
+Für ein neues Release vorher `<Version>` in `WidgetTea.csproj` erhöhen und nach `main` bringen. `-Publish` veröffentlicht
+nur den Stand, der auf `origin` als `main` liegt: Ist ein anderer Commit ausgecheckt (ein Zweig, ein nicht aktualisierter
+oder ein noch nicht gepushter Stand), bricht es vor dem Bauen ab.
 
 Verlangt eine neue Fassung eine neuere .NET-Laufzeit, `DOTNET_MINPATCH` in `installer/WidgetTea.nsi` anheben.
 
@@ -82,6 +85,7 @@ Verlangt eine neue Fassung eine neuere .NET-Laufzeit, `DOTNET_MINPATCH` in `inst
 
 ```powershell
 dotnet test tests\WidgetTea.Tests\WidgetTea.Tests.csproj   # Unit-Tests des Updaters
+.\tests\release\Test-ReleaseChecks.ps1                     # Sperre von release.ps1 -Publish
 ```
 
 Bei jedem Pull Request baut die CI (`.github/workflows/ci.yml`) App und Setup, lässt die Unit-Tests laufen und prüft
@@ -90,6 +94,8 @@ unbeantwortete Selbst-Update, die Deinstallation aus einem Ordner mit fremden Da
 Programme startet, die neben ihm liegen und wie Hilfsprogramme von Windows heißen, und dass es die laufende App an ihr
 selbst erkennt und nicht am Programmnamen, und dass ein Update nur die Dateien der vorigen Fassung entfernt. Das gebaute Setup hängt als Artefakt am Lauf. Die Installer-Prüfungen (`tests\installer\Test-Installer.ps1`)
 installieren und deinstallieren WidgetTea für den angemeldeten Benutzer – sie gehören in die CI, nicht auf den eigenen Rechner.
+Die Release-Prüfungen (`tests\release\Test-ReleaseChecks.ps1`) bauen und veröffentlichen nichts: Sie arbeiten mit
+Wegwerf-Repositorys in einem eigenen Ordner und laufen überall, wo es git und PowerShell gibt.
 Ein zweiter Job stellt das Selbst-Update nach, wie die App es auslöst (`tests\update\Test-SelfUpdate.ps1`): Die gebaute
 App fragt einen Update-Server auf dem Runner, lädt ein „neueres" Setup und installiert es; ein zweites Mal scheitert
 das Setup, und die App darf es danach nicht bei jedem Start erneut versuchen.
