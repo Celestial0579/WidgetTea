@@ -70,7 +70,9 @@ Voraussetzungen: .NET 10 SDK, [NSIS](https://nsis.sourceforge.io/) (`winget inst
 .\build\release.ps1 -Publish   # zusätzlich Tag v<version> pushen und GitHub-Release anlegen
 ```
 
-Für ein neues Release vorher `<Version>` in `WidgetTea.csproj` erhöhen und committen.
+Für ein neues Release vorher `<Version>` in `WidgetTea.csproj` erhöhen und nach `main` bringen. `-Publish` veröffentlicht
+nur den Stand, der auf `origin` als `main` liegt: Ist ein anderer Commit ausgecheckt (ein Zweig, ein nicht aktualisierter
+oder ein noch nicht gepushter Stand), bricht es vor dem Bauen ab.
 
 Verlangt eine neue Fassung eine neuere .NET-Laufzeit, `DOTNET_MINPATCH` in `installer/WidgetTea.nsi` anheben.
 
@@ -78,12 +80,15 @@ Verlangt eine neue Fassung eine neuere .NET-Laufzeit, `DOTNET_MINPATCH` in `inst
 
 ```powershell
 dotnet test tests\WidgetTea.Tests\WidgetTea.Tests.csproj   # Unit-Tests des Updaters
+.\tests\release\Test-ReleaseChecks.ps1                     # Sperre von release.ps1 -Publish
 ```
 
 Bei jedem Pull Request baut die CI (`.github/workflows/ci.yml`) App und Setup, lässt die Unit-Tests laufen und prüft
 das Setup still: Neuinstallation, Update vom veröffentlichten 1.0.0, Abbruch ohne passende Laufzeit, das abgelehnte und das
 unbeantwortete Selbst-Update sowie die Deinstallation aus einem Ordner mit fremden Dateien. Das gebaute Setup hängt als Artefakt am Lauf. Die Installer-Prüfungen (`tests\installer\Test-Installer.ps1`)
 installieren und deinstallieren WidgetTea für den angemeldeten Benutzer – sie gehören in die CI, nicht auf den eigenen Rechner.
+Die Release-Prüfungen (`tests\release\Test-ReleaseChecks.ps1`) bauen und veröffentlichen nichts: Sie arbeiten mit
+Wegwerf-Repositorys in einem eigenen Ordner und laufen überall, wo es git und PowerShell gibt.
 Veröffentlicht wird in der CI nichts.
 
 ## Lizenz

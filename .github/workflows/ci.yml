@@ -37,6 +37,10 @@ jobs:
       - name: Tests
         run: dotnet test tests/WidgetTea.Tests/WidgetTea.Tests.csproj -c Release
 
+      - name: Release-Prüfungen
+        shell: pwsh
+        run: ./tests/release/Test-ReleaseChecks.ps1
+
       - name: NSIS bereitstellen
         shell: pwsh
         run: |
