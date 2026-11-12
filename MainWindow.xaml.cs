@@ -165,11 +165,18 @@ public partial class MainWindow : Window
                 LastSync = DateTimeOffset.Now,
                 Days = days,
             };
-            _cache.Save();
+            try
+            {
+                _cache.Save();
+            }
+            catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException)
+            {
+                // Der Zwischenspeicher ist nur für den Start ohne Netz da. Lässt er sich nicht schreiben, gilt der Abruf trotzdem.
+            }
             Render();
             SetStatus($"Aktualisiert {_cache.LastSync:HH:mm}", OnlineBrush);
         }
-        catch (GiteaAuthException ex)
+        catch (GiteaException ex)
         {
             RenderFromCache();
             SetStatus(ex.Message + CacheSuffix(), ErrorBrush);

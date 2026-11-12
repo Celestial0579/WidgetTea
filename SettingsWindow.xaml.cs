@@ -47,11 +47,7 @@ public partial class SettingsWindow : Window
     /// <summary>Werte aus dem Formular; null + Meldung bei ungültiger Eingabe.</summary>
     private AppSettings? ReadForm()
     {
-        var url = BaseUrlBox.Text.Trim().TrimEnd('/');
-        if (url.EndsWith("/api/v1", StringComparison.OrdinalIgnoreCase))
-            url = url[..^"/api/v1".Length];
-        if (!url.Contains("://"))
-            url = "https://" + url;
+        AppSettings.TryNormalizeBaseUrl(BaseUrlBox.Text, out var url);
 
         var candidate = new AppSettings
         {
@@ -94,7 +90,7 @@ public partial class SettingsWindow : Window
                 total += count;
             ShowResult($"Verbindung OK – {total} Beiträge im letzten Jahr.", OkBrush);
         }
-        catch (GiteaAuthException ex)
+        catch (GiteaException ex)
         {
             ShowResult(ex.Message, FailBrush);
         }
@@ -134,15 +130,32 @@ public partial class SettingsWindow : Window
 
     private void OnTokenLinkClick(object sender, RoutedEventArgs e)
     {
-        var url = BaseUrlBox.Text.Trim().TrimEnd('/');
-        if (string.IsNullOrEmpty(url))
+        if (string.IsNullOrWhiteSpace(BaseUrlBox.Text))
         {
             ShowResult("Zuerst die Gitea-Adresse eintragen.", FailBrush);
             return;
         }
-        if (!url.Contains("://"))
-            url = "https://" + url;
-        Process.Start(new ProcessStartInfo(url + "/user/settings/applications") { UseShellExecute = true });
+        // Die Adresse geht an die Shell. Nur http und https: Alles andere öffnete irgendein Programm oder gar keines.
+        if (!AppSettings.TryNormalizeBaseUrl(BaseUrlBox.Text, out var url))
+        {
+            ShowResult("Die Gitea-Adresse muss mit http:// oder https:// beginnen.", FailBrush);
+            return;
+        }
+        try
+        {
+            Process.Start(new ProcessStartInfo(url + "/user/settings/applications") { UseShellExecute = true });
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            ShowResult("Der Browser ließ sich nicht öffnen.", FailBrush);
+        }
+    }
+
+    private void OnBaseUrlChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
+    {
+        // Das Ereignis kann kommen, bevor der Hinweis unter dem Feld angelegt ist.
+        if (HttpWarning is not null)
+            HttpWarning.Visibility = AppSettings.IsUnencrypted(BaseUrlBox.Text) ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void ShowResult(string text, Brush color)

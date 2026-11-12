@@ -43,9 +43,30 @@ public sealed class AppSettings
     public static bool Exists => File.Exists(AppPaths.SettingsFile);
 
     [JsonIgnore]
-    public bool IsComplete =>
-        !string.IsNullOrWhiteSpace(Username) &&
-        Uri.TryCreate(BaseUrl, UriKind.Absolute, out var uri) &&
+    public bool IsComplete => !string.IsNullOrWhiteSpace(Username) && IsHttpUrl(BaseUrl);
+
+    /// <summary>
+    /// Bringt eine eingegebene Gitea-Adresse in Form: ohne Leerraum, ohne Schrägstrich am Ende und ohne /api/v1;
+    /// fehlt das Schema, wird https:// ergänzt. Falsch, wenn danach keine http- oder https-Adresse dasteht.
+    /// </summary>
+    public static bool TryNormalizeBaseUrl(string? input, out string url)
+    {
+        url = (input ?? "").Trim().TrimEnd('/');
+        if (url.EndsWith("/api/v1", StringComparison.OrdinalIgnoreCase))
+            url = url[..^"/api/v1".Length];
+        if (url.Length == 0)
+            return false;
+        if (!url.Contains("://"))
+            url = "https://" + url;
+        return IsHttpUrl(url);
+    }
+
+    /// <summary>Wahr, wenn die Adresse unverschlüsselt ist: Das Token ginge dann im Klartext über das Netz.</summary>
+    public static bool IsUnencrypted(string? input) =>
+        TryNormalizeBaseUrl(input, out var url) && url.StartsWith("http://", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsHttpUrl(string? url) =>
+        Uri.TryCreate(url, UriKind.Absolute, out var uri) &&
         (uri.Scheme == Uri.UriSchemeHttps || uri.Scheme == Uri.UriSchemeHttp);
 
     public static AppSettings Load()
