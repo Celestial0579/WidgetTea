@@ -1,0 +1,72 @@
+# Baut WidgetTea samt Setup bei jedem Push auf main und bei Pull Requests, prüft das Setup still
+# (Neuinstallation, Update von 1.0.0, Abbruch ohne passende .NET-Laufzeit) und legt es als Artefakt ab,
+# damit es sich vor einem Release an einem echten Rechner ausprobieren lässt.
+#
+# Veröffentlicht wird hier nichts: kein Tag, kein Release. Das bleibt build\release.ps1 -Publish von Hand,
+# denn ein Release löst bei allen Installationen das Selbst-Update aus.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Tests, Setup, Installer-Prüfungen
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      DOTNET_NOLOGO: 'true'
+      DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Tests
+        run: dotnet test tests/WidgetTea.Tests/WidgetTea.Tests.csproj -c Release
+
+      - name: NSIS bereitstellen
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\NSIS\makensis.exe") -and -not (Test-Path "$env:ProgramFiles\NSIS\makensis.exe")) {
+            choco install nsis -y --no-progress
+          }
+
+      - name: Setup bauen (ohne Veröffentlichung)
+        shell: pwsh
+        run: ./build/release.ps1
+
+      - name: Installer-Prüfungen
+        shell: pwsh
+        run: ./tests/installer/Test-Installer.ps1
+
+      - name: Setup als Artefakt
+        uses: actions/upload-artifact@v7
+        with:
+          name: WidgetTea-Setup
+          path: |
+            artifacts/*/WidgetTea-*-setup.exe
+            artifacts/*/WidgetTea-*-setup.exe.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Protokolle der Installer-Prüfungen
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: Installer-Protokolle
+          path: artifacts/test-logs/
+          if-no-files-found: ignore
+          retention-days: 14

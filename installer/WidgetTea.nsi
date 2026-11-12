@@ -56,9 +56,13 @@ RequestExecutionLevel user
 
 ; Benötigte .NET-Laufzeit (WPF/WinForms → Desktop Runtime). Die Mindest-Patchversion enthält die
 ; vorausgesetzten Sicherheitskorrekturen; bei neuen kritischen .NET-Patches anheben.
+; Von außen überschreibbar (/DDOTNET_MINPATCH=999), damit die Installer-Tests den Abbruch ohne passende
+; Laufzeit auf einem Rechner prüfen können, auf dem sie vorhanden ist.
 !define DOTNET_FX       "Microsoft.WindowsDesktop.App"
 !define DOTNET_MAJOR    "10.0"
-!define DOTNET_MINPATCH 14
+!ifndef DOTNET_MINPATCH
+  !define DOTNET_MINPATCH 14
+!endif
 !define DOTNET_NAME     ".NET Desktop Runtime"
 !define DOTNET_WINGET   "Microsoft.DotNet.DesktopRuntime.10"
 !define DOTNET_URL      "https://aka.ms/dotnet/10.0/windowsdesktop-runtime-win-x64.exe"
