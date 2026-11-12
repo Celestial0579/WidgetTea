@@ -222,10 +222,7 @@ function Get-RuntimeOfApp([string]$Exe, [string]$Label) {
     $coreclr
 }
 
-function Get-Marker {
-    $item = Get-ItemProperty -Path $regKey -Name 'AutoUpdatePaused' -ErrorAction SilentlyContinue
-    if ($item) { $item.AutoUpdatePaused } else { $null }
-}
+function Test-Marker { Test-Path -LiteralPath (Join-Path $settingsDir 'autoupdate-paused') }
 function Get-AutoUpdate { (Get-Content -LiteralPath $settingsFile -Raw -Encoding UTF8 | ConvertFrom-Json).autoUpdate }
 function Read-Settings { [System.IO.File]::ReadAllText($settingsFile, [System.Text.Encoding]::UTF8) }
 function Write-Settings([string]$text) {
@@ -341,7 +338,7 @@ Check ($r.Seen -contains 'bleibt in der bisherigen Version') 'Das Setup hat gesa
 Check (Test-SameSnapshot $before (Get-Snapshot $dir)) 'Die vorhandene Installation ist Byte für Byte unverändert'
 Check ($settingsNow -ceq $settingsOriginal.Replace('"autoUpdate": true', '"autoUpdate":false')) 'In den Einstellungen ist genau diese eine Stelle geändert'
 Check ((Get-AutoUpdate) -eq $false) 'Automatische Updates sind aus, die Datei ist gültiges JSON'
-Check ((Get-Marker) -eq '1') 'Der Merker für die Rücknahme ist gesetzt'
+Check (Test-Marker) 'Der Merker für die Rücknahme liegt neben den Einstellungen'
 if ($relaunched) { Ok 'Die alte Version wurde wieder gestartet' } else { Note 'Wiederstart der alten Version hier nicht beobachtet (explorer.exe startet in dieser Sitzung nichts?)' }
 
 # ---------------------------------------------------------------- 5 Update 1.0.0 → neu
@@ -369,7 +366,7 @@ Check (Test-Path (Join-Path $dir 'meine-notizen.txt')) 'Die fremde Datei im Haup
 Check (Test-SameSnapshot $foreignBefore (Get-Snapshot (Join-Path $dir 'eigener-ordner'))) 'Der fremde Unterordner ist unverändert'
 Check ((Get-Item (Join-Path $dir 'WidgetTea.exe')).VersionInfo.ProductVersion -like "$version*") "Installiert ist Version $version"
 Check ((Read-Settings) -ceq $settingsOriginal) 'Die Einstellungen sind wieder genau wie vorher, automatische Updates an'
-Check (-not (Get-Marker)) 'Der Merker ist gelöscht'
+Check (-not (Test-Marker)) 'Der Merker ist gelöscht'
 if ($relaunched) { Ok 'Das Setup hat die neue Version gestartet' } else { Note 'Start durch das Setup hier nicht beobachtet (explorer.exe startet in dieser Sitzung nichts?)' }
 $runtime = Get-RuntimeOfApp (Join-Path $dir 'WidgetTea.exe') 'nach-update'
 Check ($runtime -match '\\shared\\Microsoft\.NETCore\.App\\10\.0\.\d+\\coreclr\.dll$') 'Die App startet nach dem Update mit der installierten Laufzeit'
@@ -384,7 +381,7 @@ Stop-App
 Check ($r.ExitCode -eq 3) "Exitcode 3 (war $($r.ExitCode))"
 Check (Test-SameSnapshot $before (Get-Snapshot $dir)) 'Die vorhandene Installation ist Byte für Byte unverändert'
 Check ($settingsNow -ceq $settingsOriginal.Replace('"autoUpdate": true', '"autoUpdate":false')) 'Automatische Updates sind aus'
-Check ((Get-Marker) -eq '1') 'Der Merker ist gesetzt'
+Check (Test-Marker) 'Der Merker ist gesetzt'
 # Die App speichert ihre Einstellungen neu (etwa nach dem Verschieben des Fensters) und schreibt dabei „: false“.
 Write-Settings $settingsOriginal.Replace('"autoUpdate": true', '"autoUpdate": false')
 
@@ -399,6 +396,6 @@ Check (Test-Path (Join-Path $dir 'meine-notizen.txt')) 'Die fremde Datei im Haup
 Check (Test-SameSnapshot $foreignBefore (Get-Snapshot (Join-Path $dir 'eigener-ordner'))) 'Der fremde Unterordner ist unverändert'
 Check ((Read-Settings) -ceq $settingsOriginal.Replace('"autoUpdate": true', '"autoUpdate": true ')) 'Automatische Updates sind wieder an, sonst ist nichts geändert'
 Check ((Get-AutoUpdate) -eq $true) 'Die Datei ist gültiges JSON'
-Check (-not (Get-Marker)) 'Der Merker ist gelöscht'
+Check (-not (Test-Marker)) 'Der Merker ist gelöscht'
 
 Write-Host "`nAlle Installer-Prüfungen bestanden." -ForegroundColor Green

@@ -42,6 +42,7 @@ Alles unter `%LOCALAPPDATA%\WidgetTea\`:
 | `settings.json` | Adresse, Benutzer, Intervall, Fensterposition – **keine Geheimnisse** |
 | `credentials.bin` | Access-Token, DPAPI-verschlüsselt (CurrentUser + App-Entropy), nur für das eigene Windows-Konto lesbar |
 | `cache.json` | letzter Stand der Heatmap für den Offline-Betrieb |
+| `autoupdate-paused` | leerer Merker, nur nach einem abgelehnten Selbst-Update: Das Setup hat „Updates automatisch installieren“ ausgeschaltet und schaltet es beim nächsten Update wieder ein |
 
 Das Token wird nur über das Einstellungsfenster gesetzt und nie im Klartext auf die Platte geschrieben.
 

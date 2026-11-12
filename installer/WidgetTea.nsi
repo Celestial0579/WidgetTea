@@ -52,7 +52,9 @@ RequestExecutionLevel user
 !define AU_OFF       '"autoUpdate":false'    ; so schreibt es PauseAutoUpdate
 !define AU_OFF_APP   '"autoUpdate": false'   ; so schreibt es die App beim nächsten Speichern
 !define AU_ON_PAD    '"autoUpdate": true '   ; gleich lang wie AU_OFF_APP; das Leerzeichen vor dem Komma ist gültiges JSON
-!define PAUSEDVALUE  "AutoUpdatePaused"      ; Merker unter SETTINGSKEY: Das Setup hat die Updates ausgeschaltet
+; Leere Merkerdatei: Das Setup hat die Updates ausgeschaltet. Sie liegt neben den Einstellungen und nicht in
+; der Registry, damit sie eine Deinstallation genau dann überlebt, wenn die Einstellungen es auch tun.
+!define PAUSEDFILE   "$LOCALAPPDATA\${APPNAME}\autoupdate-paused"
 
 ; Benötigte .NET-Laufzeit (WPF/WinForms → Desktop Runtime). Die Mindest-Patchversion enthält die
 ; vorausgesetzten Sicherheitskorrekturen; bei neuen kritischen .NET-Patches anheben.
@@ -187,15 +189,18 @@ Function PauseAutoUpdate
     ${EndIf}
   ${EndIf}
   ${If} $R3 == 1
-    WriteRegStr HKCU "${SETTINGSKEY}" "${PAUSEDVALUE}" "1"
+    ClearErrors
+    FileOpen $R4 "${PAUSEDFILE}" w
+    ${IfNot} ${Errors}
+      FileClose $R4
+    ${EndIf}
   ${EndIf}
 FunctionEnd
 
 ; Nimmt PauseAutoUpdate nach einer gelungenen Installation zurück – aber nur, wenn das Setup selbst
 ; ausgeschaltet hatte. Wer die automatischen Updates von Hand abgestellt hat, behält seine Einstellung.
 Function ResumeAutoUpdate
-  ReadRegStr $R3 HKCU "${SETTINGSKEY}" "${PAUSEDVALUE}"
-  ${If} $R3 == "1"
+  ${If} ${FileExists} "${PAUSEDFILE}"
     Push "${SETTINGSFILE}"
     Push '${AU_OFF}'
     Push '${AU_ON}'
@@ -209,7 +214,7 @@ Function ResumeAutoUpdate
       Call PatchFile
       Pop $R3
     ${EndIf}
-    DeleteRegValue HKCU "${SETTINGSKEY}" "${PAUSEDVALUE}"
+    Delete "${PAUSEDFILE}"
   ${EndIf}
 FunctionEnd
 
