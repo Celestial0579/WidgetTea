@@ -383,8 +383,12 @@ Check ($r.Seen.Count -eq 0) 'Keine Nachfrage'
 foreach ($f in 'coreclr.dll', 'hostfxr.dll', 'hostpolicy.dll', 'clrjit.dll', 'createdump.exe', 'System.Private.CoreLib.dll', 'PresentationFramework.dll') {
     Check (-not (Test-Path (Join-Path $dir $f))) "$f ist weg"
 }
-$dlls = @(Get-ChildItem -LiteralPath $dir -Filter '*.dll' -File | ForEach-Object Name)
-Check ($dlls.Count -eq 1 -and $dlls[0] -eq 'WidgetTea.dll') "Im Hauptordner liegt nur noch WidgetTea.dll (gefunden: $($dlls -join ', '))"
+# Nichts darf liegen bleiben: Im Hauptordner steht genau das, was das neue Setup mitbringt, plus die fremde Datei.
+$expectedFiles = @(@(Get-ChildItem -LiteralPath $publishDir -File | ForEach-Object Name) + 'LICENSE.txt', 'uninstall.exe', 'meine-notizen.txt' | Sort-Object)
+$actualFiles = @(Get-ChildItem -LiteralPath $dir -File | ForEach-Object Name | Sort-Object)
+Write-Host "       Hauptordner: $($actualFiles -join ', ')"
+$unexpected = @(Compare-Object -ReferenceObject $expectedFiles -DifferenceObject $actualFiles | ForEach-Object { "$($_.SideIndicator) $($_.InputObject)" })
+Check ($unexpected.Count -eq 0) "Im Hauptordner liegt genau das neue Programm und die fremde Datei (Abweichung: $($unexpected -join ', '))"
 $subdirs = @(Get-ChildItem -LiteralPath $dir -Directory | ForEach-Object Name)
 Check ($subdirs.Count -eq 1 -and $subdirs[0] -eq 'eigener-ordner') "Die Sprachordner der Laufzeit sind weg (übrig: $($subdirs -join ', '))"
 Check (Test-Path (Join-Path $dir 'meine-notizen.txt')) 'Die fremde Datei im Hauptordner ist noch da'
