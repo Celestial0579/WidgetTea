@@ -164,7 +164,9 @@ $deadline = (Get-Date).AddSeconds(60)
 while ((Get-Date) -lt $deadline -and -not $coreclr) {
     Start-Sleep -Milliseconds 500
     if (Test-Path $trace) {
-        $hit = Select-String -LiteralPath $trace -Pattern '[A-Za-z]:\\[^\r\n\]]*\\coreclr\.dll' -AllMatches | Select-Object -First 1
+        # Der Starter nennt coreclr.dll erst an Orten, an denen er nur nachsieht. Gesucht ist die geladene Laufzeit,
+        # und die liegt unter shared\Microsoft.NETCore.App\<Version>.
+        $hit = Select-String -LiteralPath $trace -Pattern '[A-Za-z]:\\[^\r\n\]]*\\shared\\Microsoft\.NETCore\.App\\[^\\\r\n\]]+\\coreclr\.dll' -AllMatches | Select-Object -First 1
         if ($hit) { $coreclr = $hit.Matches[0].Value }
     }
 }
