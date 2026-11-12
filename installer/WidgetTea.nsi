@@ -459,6 +459,16 @@ Function .onInstSuccess
   ${EndIf}
 FunctionEnd
 
+; Scheitert die Installation beim Selbst-Update, startet das Setup die App trotzdem wieder. Sonst bliebe das Widget
+; geschlossen, bis jemand es vermisst. Dass sie das Update nicht gleich noch einmal versucht, regelt die App
+; selbst: Sie hat den begonnenen Versuch vermerkt (UpdateAttempt.cs).
+Function .onInstFailed
+  ${If} $Restart == 1
+  ${AndIf} ${FileExists} "$INSTDIR\${EXENAME}"
+    Call LaunchApp
+  ${EndIf}
+FunctionEnd
+
 ; ---------- Installation ----------
 
 Section "WidgetTea (erforderlich)" SecMain

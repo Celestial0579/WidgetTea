@@ -61,6 +61,10 @@ WidgetTea fragt kurz nach dem Start und danach alle 6 Stunden `releases/latest` 
 gegen die mitveröffentlichte `.sha256` geprüft und still mit `/S /RESTART` installiert – oder, wenn
 „Updates automatisch installieren“ aus ist, per Tray-Hinweis angeboten. Ohne passende Prüfsumme wird nichts installiert.
 
+Läuft nach einem begonnenen Update noch die alte Version, ist die Installation gescheitert. WidgetTea versucht dieselbe
+Version dann nicht bei jedem Start erneut, sondern frühestens nach 24 Stunden und höchstens dreimal von selbst; über das
+Tray-Menü lässt sich das Update jederzeit von Hand starten.
+
 ## Bauen & Release
 
 Voraussetzungen: .NET 10 SDK, [NSIS](https://nsis.sourceforge.io/) (`winget install NSIS.NSIS`), für Releases die `gh`-CLI.

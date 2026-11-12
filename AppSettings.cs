@@ -13,6 +13,7 @@ public static class AppPaths
     public static string SettingsFile => Path.Combine(Root, "settings.json");
     public static string CredentialsFile => Path.Combine(Root, "credentials.bin");
     public static string CacheFile => Path.Combine(Root, "cache.json");
+    public static string UpdateAttemptFile => Path.Combine(Root, "update-attempt.json");
 }
 
 /// <summary>Einstellungen ohne Geheimnisse – das Token liegt separat im <see cref="CredentialStore"/>.</summary>

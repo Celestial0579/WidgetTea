@@ -31,6 +31,7 @@
        beenden, gibt das Setup auf; die Deinstallation beendet die laufende App.
    12  Dateien, die in einer neuen Fassung wegfallen, verschwinden beim Update; fremde Dateien bleiben, und eine
        Dateiliste, die aus dem Installationsordner hinausweist, wird nicht befolgt.
+   13  Scheitert die Installation beim Selbst-Update (/S /RESTART), startet das Setup die App trotzdem wieder.
 
   Für 3, 4, 6 und 8 wird das Setup ein zweites Mal gebaut, mit einer Mindestversion der Laufzeit, die es nicht
   gibt (/DDOTNET_MINPATCH=999), und mit kurzem Zeitablauf der Nachfrage. So lässt sich „Laufzeit fehlt“ auf
@@ -814,5 +815,35 @@ $left = @(Get-ChildItem -LiteralPath $target -Recurse -File | ForEach-Object { $
 Write-Host "       Übrig: $($left -join ', ')"
 Check (-not (Compare-Object -ReferenceObject @('alt\meins.txt', 'meine.dll') -DifferenceObject $left)) 'Nach der Deinstallation liegen dort nur noch die fremden Dateien'
 Check (-not (Test-Path $regKey)) 'Die Registry-Einträge sind weg'
+
+# ---------------------------------------------------------------- 13 Gescheitertes Selbst-Update
+
+Step '13 Scheitert die Installation beim Selbst-Update, startet das Setup die App wieder'
+# Die Testfassung aus Stufe 11, die nichts beendet, scheitert an der laufenden App. Mit /RESTART muss das Setup
+# danach die App starten. Der Aufruf trifft hier den Stellvertreter: Von ihm läuft dann eine zweite Instanz.
+$target = Join-Path $work 'neustart'
+$targetExe = Join-Path $target 'WidgetTea.exe'
+function Get-TargetProcesses { @(Get-Process -Name 'WidgetTea' -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $targetExe }) }
+try {
+    $r = Invoke-Setup $setup @('/S', "/D=$target")
+    Check ($r.ExitCode -eq 0) "Exitcode 0 (war $($r.ExitCode))"
+    Start-StandIn $sleeperExe $target | Out-Null
+    Check ((Get-TargetProcesses).Count -eq 1) 'Im Zielordner läuft die App (ein Stellvertreter)'
+
+    $r = Invoke-Setup $setupNoKill @('/S', '/RESTART', "/D=$target") -TimeoutSec 180
+    Check ($r.ExitCode -eq 2) "Exitcode 2, abgebrochen (war $($r.ExitCode))"
+    $deadline = (Get-Date).AddSeconds(30)
+    while ((Get-TargetProcesses).Count -lt 2 -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 500 }
+    Check ((Get-TargetProcesses).Count -ge 2) 'Das Setup hat die App nach dem Scheitern wieder gestartet'
+}
+finally {
+    Get-TargetProcesses | ForEach-Object { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue }
+}
+Start-Sleep -Seconds 1
+$r = Invoke-Setup $setup @('/S', "/D=$target")
+Check ($r.ExitCode -eq 0) "Exitcode 0 (war $($r.ExitCode))"
+Start-Process -FilePath (Join-Path $target 'uninstall.exe') -ArgumentList '/S' -Wait
+Wait-Gone $target
+Check (-not (Test-Path $target)) 'Die Deinstallation entfernt den Ordner'
 
 Write-Host "`nAlle Installer-Prüfungen bestanden." -ForegroundColor Green
