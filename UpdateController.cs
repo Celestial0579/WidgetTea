@@ -25,6 +25,12 @@ public sealed class UpdateController
     /// <summary>Neues Update gefunden, das nicht automatisch installiert wird.</summary>
     public event Action<UpdateInfo>? UpdateAvailable;
 
+    /// <summary>
+    /// Update gefunden, dessen Installation schon einmal begonnen wurde und nicht durchgelaufen ist. Es wird
+    /// vorerst nicht noch einmal von selbst installiert (siehe <see cref="UpdateAttempt"/>).
+    /// </summary>
+    public event Action<UpdateInfo>? UpdateStalled;
+
     /// <summary>Hinweis für den Nutzer (Tray-Sprechblase).</summary>
     public event Action<string>? Message;
 
@@ -41,6 +47,12 @@ public sealed class UpdateController
     public void Start()
     {
         UpdateService.CleanupAfterUpdate();
+
+        // Läuft inzwischen die Version, deren Installation zuletzt begonnen wurde, ist der Vermerk erledigt.
+        var attempt = UpdateAttempt.Load();
+        if (attempt != null && UpdateAttempt.IsSettled(attempt, UpdateService.CurrentVersion))
+            UpdateAttempt.Clear();
+
         if (!UpdateService.IsConfigured)
             return;
         _timer.Interval = FirstCheck;
@@ -71,10 +83,17 @@ public sealed class UpdateController
 
             bool isNew = Available?.Version != info.Version;
             Available = info;
-            if (_settings.AutoUpdate || manual)
+            if (manual)
+                await InstallCoreAsync();
+            else if (!_settings.AutoUpdate)
+            {
+                if (isNew)
+                    UpdateAvailable?.Invoke(info);
+            }
+            else if (UpdateAttempt.AllowsAutomatic(UpdateAttempt.Load(), info.Version, DateTimeOffset.Now))
                 await InstallCoreAsync();
             else if (isNew)
-                UpdateAvailable?.Invoke(info);
+                UpdateStalled?.Invoke(info);   // nicht noch einmal von selbst: Das Widget schlösse sich nach jedem Start
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or System.Text.Json.JsonException)
         {
@@ -109,10 +128,13 @@ public sealed class UpdateController
             var update = Available!;
             Message?.Invoke($"Update auf {update.Version.ToString(3)} wird installiert …");
             var setup = await new UpdateService(UpdateService.TokenFor(_settings)).DownloadAsync(update);
+            // Vermerken, bevor das Setup startet: Danach beendet sich die App und erfährt nicht mehr, wie es ausgeht.
+            UpdateAttempt.Next(UpdateAttempt.Load(), update.Version, DateTimeOffset.Now).Save();
             UpdateService.LaunchInstaller(setup);
             Application.Current.Shutdown();
         }
-        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or InvalidOperationException or IOException)
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or InvalidOperationException or IOException
+                                       or System.ComponentModel.Win32Exception)
         {
             Message?.Invoke("Update fehlgeschlagen: " + ex.Message);
         }

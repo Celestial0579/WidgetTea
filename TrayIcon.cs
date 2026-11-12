@@ -54,6 +54,9 @@ public sealed class TrayIcon : IDisposable
         updates.Message += text => _icon.ShowBalloonTip(5000, "WidgetTea", text, ToolTipIcon.Info);
         updates.UpdateAvailable += info => _icon.ShowBalloonTip(10000, "WidgetTea",
             $"Version {info.Version.ToString(3)} ist verfügbar – hier klicken zum Installieren.", ToolTipIcon.Info);
+        updates.UpdateStalled += info => _icon.ShowBalloonTip(10000, "WidgetTea",
+            $"Das Update auf {info.Version.ToString(3)} ist beim letzten Versuch nicht durchgelaufen – hier klicken, um es erneut zu versuchen.",
+            ToolTipIcon.Warning);
     }
 
     private static string Truncate(string s, int max) => s.Length <= max ? s : s[..max];

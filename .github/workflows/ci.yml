@@ -2,6 +2,11 @@
 # (Neuinstallation, Update von 1.0.0, Abbruch ohne passende .NET-Laufzeit) und legt es als Artefakt ab,
 # damit es sich vor einem Release an einem echten Rechner ausprobieren lässt.
 #
+# Ein zweiter Job stellt das Selbst-Update nach, wie die App es auslöst: mit der gebauten App und einem
+# Update-Server auf dem Runner anstelle von GitHub.
+# Ein dritter läuft auf einem ARM64-Windows: Dort sucht das Setup die x64-Laufzeit an einem anderen Ort, winget muss
+# ausdrücklich die x64-Fassung holen, und die App läuft in der Emulation.
+#
 # Veröffentlicht wird hier nichts: kein Tag, kein Release. Das bleibt build\release.ps1 -Publish von Hand,
 # denn ein Release löst bei allen Installationen das Selbst-Update aus.
 name: CI
@@ -37,12 +42,27 @@ jobs:
       - name: Tests
         run: dotnet test tests/WidgetTea.Tests/WidgetTea.Tests.csproj -c Release
 
+      - name: Release-Prüfungen
+        shell: pwsh
+        run: ./tests/release/Test-ReleaseChecks.ps1
+
+      # Dasselbe mit der PowerShell, die jedes Windows mitbringt: Dort muss release.ps1 genauso laufen.
+      - name: Release-Prüfungen unter Windows PowerShell 5.1
+        shell: powershell
+        run: ./tests/release/Test-ReleaseChecks.ps1
+
+      # Bis zu drei Versuche: Der Download über Chocolatey scheitert gelegentlich, vor allem wenn mehrere Jobs
+      # gleichzeitig installieren.
       - name: NSIS bereitstellen
         shell: pwsh
         run: |
-          if (-not (Test-Path "${env:ProgramFiles(x86)}\NSIS\makensis.exe") -and -not (Test-Path "$env:ProgramFiles\NSIS\makensis.exe")) {
+          $makensis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe", "$env:ProgramFiles\NSIS\makensis.exe"
+          for ($try = 1; $try -le 3 -and -not ($makensis | Where-Object { Test-Path $_ }); $try++) {
+            if ($try -gt 1) { Start-Sleep -Seconds 20 }
             choco install nsis -y --no-progress
           }
+          if (-not ($makensis | Where-Object { Test-Path $_ })) { throw 'NSIS ließ sich nicht installieren' }
+          exit 0
 
       - name: Setup bauen (ohne Veröffentlichung)
         shell: pwsh
@@ -67,6 +87,94 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: Installer-Protokolle
+          path: artifacts/test-logs/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  selbstupdate:
+    name: Selbst-Update mit der gebauten App
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      DOTNET_NOLOGO: 'true'
+      DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+
+      # Bis zu drei Versuche: Der Download über Chocolatey scheitert gelegentlich, vor allem wenn mehrere Jobs
+      # gleichzeitig installieren.
+      - name: NSIS bereitstellen
+        shell: pwsh
+        run: |
+          $makensis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe", "$env:ProgramFiles\NSIS\makensis.exe"
+          for ($try = 1; $try -le 3 -and -not ($makensis | Where-Object { Test-Path $_ }); $try++) {
+            if ($try -gt 1) { Start-Sleep -Seconds 20 }
+            choco install nsis -y --no-progress
+          }
+          if (-not ($makensis | Where-Object { Test-Path $_ })) { throw 'NSIS ließ sich nicht installieren' }
+          exit 0
+
+      - name: Selbst-Update-Prüfungen
+        shell: pwsh
+        run: ./tests/update/Test-SelfUpdate.ps1
+
+      - name: Protokolle der Selbst-Update-Prüfungen
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: Selbstupdate-Protokolle
+          path: artifacts/test-logs/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  arm64:
+    name: ARM64-Windows
+    runs-on: windows-11-arm
+    timeout-minutes: 30
+    env:
+      DOTNET_NOLOGO: 'true'
+      DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+
+      # Bis zu drei Versuche: Der Download über Chocolatey scheitert gelegentlich, vor allem wenn mehrere Jobs
+      # gleichzeitig installieren.
+      - name: NSIS bereitstellen
+        shell: pwsh
+        run: |
+          $makensis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe", "$env:ProgramFiles\NSIS\makensis.exe"
+          for ($try = 1; $try -le 3 -and -not ($makensis | Where-Object { Test-Path $_ }); $try++) {
+            if ($try -gt 1) { Start-Sleep -Seconds 20 }
+            if ($try -lt 3 -and (Get-Command choco -ErrorAction SilentlyContinue)) {
+              choco install nsis -y --no-progress
+            } else {
+              winget install --id NSIS.NSIS --exact --source winget --silent --accept-package-agreements --accept-source-agreements --disable-interactivity
+            }
+          }
+          if (-not ($makensis | Where-Object { Test-Path $_ })) { throw 'NSIS ließ sich nicht installieren' }
+          exit 0
+
+      - name: Setup bauen (ohne Veröffentlichung)
+        shell: pwsh
+        run: ./build/release.ps1
+
+      - name: Prüfungen auf ARM64
+        shell: pwsh
+        run: ./tests/installer/Test-Arm64.ps1
+
+      - name: Protokolle der ARM64-Prüfungen
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ARM64-Protokolle
           path: artifacts/test-logs/
           if-no-files-found: ignore
           retention-days: 14

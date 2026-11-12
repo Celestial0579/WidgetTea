@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Prüft das Setup still und ohne Zuschauer: Neuinstallation, Update von 1.0.0, Abbruch ohne passende
   .NET-Laufzeit und das abgelehnte Selbst-Update.
@@ -24,6 +24,17 @@
     8  /S /RESTART ohne passende Laufzeit, und niemand antwortet: Nach dem Zeitablauf läuft das Widget wieder,
        während der Hinweis noch auf dem Schirm steht; automatische Updates sind aus wie bei „Nein“.
     9  Deinstallation mit fremden Dateien im Ordner: Weg ist nur, was das Setup installiert hat.
+   10  Fremde Programme neben dem Setup, die wie Hilfsprogramme von Windows heißen (cmd.exe, taskkill.exe, …),
+       werden nicht ausgeführt. Als Gegenprobe startet das veröffentlichte 1.0.0 sie noch.
+   11  Das Setup erkennt die laufende App an ihr selbst und nicht am Programmnamen: Ein fremdes Programm, das nur
+       so heißt, läuft weiter; ein WidgetTea aus einem anderen Ordner wird beendet; lässt sich die App nicht
+       beenden, gibt das Setup auf; die Deinstallation beendet die laufende App.
+   12  Dateien, die in einer neuen Fassung wegfallen, verschwinden beim Update; fremde Dateien bleiben, und eine
+       Dateiliste, die aus dem Installationsordner hinausweist, wird nicht befolgt.
+   13  Scheitert die Installation beim Selbst-Update (/S /RESTART), startet das Setup die App trotzdem wieder.
+   14  „Ja" auf die Nachfrage nach der Laufzeit: ohne winget führt der Weg zu „Wiederholen/Abbrechen", das im
+       stillen Modus nicht ewig wartet; mit winget ruft das Setup es auf, und scheitert die Installation
+       (Paket, das es nicht gibt), geht es ebenfalls dorthin.
 
   Für 3, 4, 6 und 8 wird das Setup ein zweites Mal gebaut, mit einer Mindestversion der Laufzeit, die es nicht
   gibt (/DDOTNET_MINPATCH=999), und mit kurzem Zeitablauf der Nachfrage. So lässt sich „Laufzeit fehlt“ auf
@@ -173,10 +184,13 @@ function Invoke-Setup {
         [string]$Exe,
         [string[]]$Arguments,
         [System.Collections.Specialized.OrderedDictionary]$Answers = [ordered]@{},
-        [int]$TimeoutSec = 300
+        [int]$TimeoutSec = 300,
+        [string]$WorkingDirectory   # aktueller Ordner des Setups; beim Doppelklick ist es der Ordner der Setup-Datei
     )
     Write-Host "   >   $(Split-Path $Exe -Leaf) $($Arguments -join ' ')"
-    $p = Start-Process -FilePath $Exe -ArgumentList $Arguments -PassThru
+    $start = @{ FilePath = $Exe; ArgumentList = $Arguments; PassThru = $true }
+    if ($WorkingDirectory) { $start.WorkingDirectory = $WorkingDirectory }
+    $p = Start-Process @start
     $null = $p.Handle   # sonst ist ExitCode nach dem Ende leer
     $seen = [System.Collections.Generic.List[string]]::new()
     $seenAt = @{}
@@ -328,8 +342,25 @@ Check ($r.ExitCode -eq 0) "Exitcode 0 (war $($r.ExitCode))"
 Check (Test-Path (Join-Path $dir 'coreclr.dll')) "$oldVersion bringt die .NET-Laufzeit selbst mit"
 Write-Host "       $((Get-ChildItem $dir -Recurse -File).Count) Dateien, $((Get-ChildItem $dir -Directory).Count) Unterordner"
 
+# Beim Update entfernt das Setup genau die Dateien von $oldVersion (installer\Bundled-1.0.0.nsh). Die Liste dort muss
+# deshalb mit dem übereinstimmen, was das veröffentlichte Setup wirklich installiert. Die tatsächliche Liste liegt
+# bei den Protokollen des Laufs, Ordner mit „\" am Ende.
+$oldFiles = @(Get-ChildItem -LiteralPath $dir -Recurse -File | ForEach-Object { $_.FullName.Substring($dir.Length + 1) })
+$oldDirs = @(Get-ChildItem -LiteralPath $dir -Recurse -Directory | ForEach-Object { $_.FullName.Substring($dir.Length + 1) })
+Set-Content -LiteralPath (Join-Path $logs "dateien-$oldVersion.txt") -Encoding ascii -Value (@($oldFiles | Sort-Object) + @($oldDirs | Sort-Object | ForEach-Object { "$_\" }))
+$bundled = Get-Content -LiteralPath (Join-Path $root 'installer\Bundled-1.0.0.nsh')
+$listedFiles = @($bundled | ForEach-Object { if ($_ -match '^Delete "\$INSTDIR\\(.+)"$') { $Matches[1] } })
+$listedDirs = @($bundled | ForEach-Object { if ($_ -match '^RMDir "\$INSTDIR\\(.+)"$') { $Matches[1] } })
+$diff = @(Compare-Object -ReferenceObject $oldFiles -DifferenceObject $listedFiles | ForEach-Object { "$($_.SideIndicator) $($_.InputObject)" })
+Check ($diff.Count -eq 0) "Die hinterlegte Liste nennt genau die $($oldFiles.Count) Dateien von $oldVersion (Abweichung: $(($diff | Select-Object -First 5) -join ', '))"
+$diff = @(Compare-Object -ReferenceObject $oldDirs -DifferenceObject $listedDirs | ForEach-Object { "$($_.SideIndicator) $($_.InputObject)" })
+Check ($diff.Count -eq 0) "und genau die $($oldDirs.Count) Unterordner (Abweichung: $(($diff | Select-Object -First 5) -join ', '))"
+
 # Fremde Dateien: Wer in einen Ordner mit eigenen Dingen installiert hat, darf sie beim Update nicht verlieren.
+# Auch keine eigenen DLLs, weder im Hauptordner noch in einem Ordner, der so heißt wie ein Sprachordner der Laufzeit.
 Set-Content -LiteralPath (Join-Path $dir 'meine-notizen.txt') -Value 'gehört nicht zu WidgetTea' -Encoding utf8
+Set-Content -LiteralPath (Join-Path $dir 'eigene-bibliothek.dll') -Value 'auch eine DLL kann fremd sein' -Encoding utf8
+Set-Content -LiteralPath (Join-Path $dir 'de\fremd.resources.dll') -Value 'und eine im Sprachordner' -Encoding utf8
 New-Item -ItemType Directory -Force (Join-Path $dir 'eigener-ordner') | Out-Null
 Set-Content -LiteralPath (Join-Path $dir 'eigener-ordner\daten.txt') -Value 'auch nicht' -Encoding utf8
 
@@ -400,14 +431,17 @@ foreach ($f in 'coreclr.dll', 'hostfxr.dll', 'hostpolicy.dll', 'clrjit.dll', 'cr
     Check (-not (Test-Path (Join-Path $dir $f))) "$f ist weg"
 }
 # Nichts darf liegen bleiben: Im Hauptordner steht genau das, was das neue Setup mitbringt, plus die fremde Datei.
-$expectedFiles = @(@(Get-ChildItem -LiteralPath $publishDir -File | ForEach-Object Name) + 'LICENSE.txt', 'uninstall.exe', 'meine-notizen.txt' | Sort-Object)
+$expectedFiles = @(@(Get-ChildItem -LiteralPath $publishDir -File | ForEach-Object Name) + 'LICENSE.txt', 'uninstall.exe', 'WidgetTea-installed-files.txt', 'meine-notizen.txt', 'eigene-bibliothek.dll' | Sort-Object)
 $actualFiles = @(Get-ChildItem -LiteralPath $dir -File | ForEach-Object Name | Sort-Object)
 Write-Host "       Hauptordner: $($actualFiles -join ', ')"
 $unexpected = @(Compare-Object -ReferenceObject $expectedFiles -DifferenceObject $actualFiles | ForEach-Object { "$($_.SideIndicator) $($_.InputObject)" })
-Check ($unexpected.Count -eq 0) "Im Hauptordner liegt genau das neue Programm und die fremde Datei (Abweichung: $($unexpected -join ', '))"
-$subdirs = @(Get-ChildItem -LiteralPath $dir -Directory | ForEach-Object Name)
-Check ($subdirs.Count -eq 1 -and $subdirs[0] -eq 'eigener-ordner') "Die Sprachordner der Laufzeit sind weg (übrig: $($subdirs -join ', '))"
+Check ($unexpected.Count -eq 0) "Im Hauptordner liegt genau das neue Programm, seine Dateiliste und die fremden Dateien (Abweichung: $($unexpected -join ', '))"
+$subdirs = @(Get-ChildItem -LiteralPath $dir -Directory | ForEach-Object Name | Sort-Object)
+Check (($subdirs -join '|') -eq 'de|eigener-ordner') "Die Sprachordner der Laufzeit sind weg, bis auf den mit der fremden Datei (übrig: $($subdirs -join ', '))"
+$inDe = @(Get-ChildItem -LiteralPath (Join-Path $dir 'de') -File | ForEach-Object Name)
+Check (($inDe -join '|') -eq 'fremd.resources.dll') "Dort liegt nur noch die fremde Datei (übrig: $($inDe -join ', '))"
 Check (Test-Path (Join-Path $dir 'meine-notizen.txt')) 'Die fremde Datei im Hauptordner ist noch da'
+Check (Test-Path (Join-Path $dir 'eigene-bibliothek.dll')) 'Die fremde DLL im Hauptordner ist noch da'
 Check (Test-SameSnapshot $foreignBefore (Get-Snapshot (Join-Path $dir 'eigener-ordner'))) 'Der fremde Unterordner ist unverändert'
 Check ((Get-Item (Join-Path $dir 'WidgetTea.exe')).VersionInfo.ProductVersion -like "$version*") "Installiert ist Version $version"
 Check ((Read-Settings) -ceq $settingsOriginal) 'Die Einstellungen sind wieder genau wie vorher, automatische Updates an'
@@ -481,11 +515,409 @@ $deadline = (Get-Date).AddSeconds(60)
 while ((Test-Path (Join-Path $dir 'uninstall.exe')) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 500 }
 $left = @(Get-ChildItem -LiteralPath $dir -Recurse -File | ForEach-Object { $_.FullName.Substring($dir.Length + 1) } | Sort-Object)
 Write-Host "       Übrig: $($left -join ', ')"
-Check (($left -join '|') -ceq 'eigener-ordner\daten.txt|meine-notizen.txt') 'Im Ordner liegen nur noch die fremden Dateien'
+$foreign = @('de\fremd.resources.dll', 'eigene-bibliothek.dll', 'eigener-ordner\daten.txt', 'meine-notizen.txt')
+Check (-not (Compare-Object -ReferenceObject $foreign -DifferenceObject $left)) 'Im Ordner liegen nur noch die fremden Dateien'
 Check (Test-SameSnapshot $foreignBefore (Get-Snapshot (Join-Path $dir 'eigener-ordner'))) 'Der fremde Unterordner ist unverändert'
 Check (-not (Test-Path $regKey)) 'Die Registry-Einträge sind weg'
 Check (-not (Get-ItemProperty -Path $runKey -Name 'WidgetTea' -ErrorAction SilentlyContinue)) 'Der Autostart ist weg'
 Check (-not (Test-Path (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\WidgetTea.lnk'))) 'Die Verknüpfung im Startmenü ist weg'
 Check (Test-Path -LiteralPath $settingsFile) 'Die Einstellungen des Nutzers bleiben liegen (Benutzerdaten nicht abgewählt)'
+
+# ---------------------------------------------------------------- 10 Fremde Programme neben dem Setup
+
+Step '10 Fremde Programme neben dem Setup werden nicht ausgeführt'
+# Das Setup ruft Hilfsprogramme von Windows auf. Nennt es sie nur beim Namen, sucht Windows zuerst im Ordner des
+# Setups und im aktuellen Ordner, und beim Doppelklick ist das der Ordner, in dem die Setup-Datei liegt. Die Köder
+# hier sind harmlose Programme mit den Namen dieser Hilfsprogramme: Sie schreiben nur auf, dass sie gestartet wurden.
+$csc = Join-Path $env:SystemRoot 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
+if (-not (Test-Path $csc)) { throw 'csc.exe von .NET Framework 4 fehlt, die Köder lassen sich nicht bauen' }
+$baitLog = Join-Path $work 'koeder-gelaufen.txt'
+$baitExe = Join-Path $work 'koeder.exe'
+$sleeperExe = Join-Path $work 'schlaefer.exe'
+Set-Content -LiteralPath (Join-Path $work 'koeder.cs') -Encoding ascii -Value @'
+using System;
+using System.Diagnostics;
+using System.IO;
+public static class Koeder
+{
+    public static int Main(string[] args)
+    {
+        try
+        {
+            File.AppendAllText(Environment.GetEnvironmentVariable("WIDGETTEA_KOEDER"),
+                Process.GetCurrentProcess().MainModule.FileName + " " + string.Join(" ", args) + Environment.NewLine);
+        }
+        catch { }
+        return 1;
+    }
+}
+'@
+Set-Content -LiteralPath (Join-Path $work 'schlaefer.cs') -Encoding ascii -Value @'
+public static class Schlaefer
+{
+    public static void Main() { System.Threading.Thread.Sleep(600000); }
+}
+'@
+& $csc /nologo "/out:$baitExe" (Join-Path $work 'koeder.cs') | Out-Null
+if ($LASTEXITCODE) { throw 'Der Köder ließ sich nicht übersetzen' }
+& $csc /nologo "/out:$sleeperExe" (Join-Path $work 'schlaefer.cs') | Out-Null
+if ($LASTEXITCODE) { throw 'Der Schläfer ließ sich nicht übersetzen' }
+
+# Ordner mit einer Kopie des Setups und den Ködern daneben; liefert den Pfad der Kopie.
+function New-BaitFolder([string]$Name, [string]$SetupFile) {
+    $folder = Join-Path $work $Name
+    New-Item -ItemType Directory -Force $folder | Out-Null
+    Copy-Item -LiteralPath $SetupFile -Destination $folder
+    foreach ($n in 'cmd.exe', 'tasklist.exe', 'find.exe', 'taskkill.exe', 'where.exe', 'winget.exe') {
+        Copy-Item -LiteralPath $baitExe -Destination (Join-Path $folder $n)
+    }
+    Join-Path $folder (Split-Path $SetupFile -Leaf)
+}
+
+function Show-BaitLog {
+    if (Test-Path -LiteralPath $baitLog) { Get-Content -LiteralPath $baitLog | ForEach-Object { Write-Host "       Köder: $_" } }
+}
+
+function Wait-Gone([string]$Path) {
+    $deadline = (Get-Date).AddSeconds(60)
+    while ((Test-Path -LiteralPath $Path) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 500 }
+}
+
+$env:WIDGETTEA_KOEDER = $baitLog
+$sleeper = $null
+try {
+    Start-Process -FilePath $baitExe -ArgumentList 'Selbsttest' -Wait -WindowStyle Hidden
+    Check ((Test-Path -LiteralPath $baitLog) -and (Get-Content -LiteralPath $baitLog -Raw) -like '*Selbsttest*') 'Der Köder meldet sich, wenn er gestartet wird'
+    Remove-Item -LiteralPath $baitLog
+
+    # Gegenprobe: Das veröffentlichte Setup ruft cmd.exe und taskkill noch ohne Pfad auf. Schlägt der Köder dort
+    # nicht an, taugt diese Stufe nicht als Prüfung.
+    $oldBait = New-BaitFolder 'koeder-alt' $oldSetup
+    $oldTarget = Join-Path $work 'koeder-alt-ziel'
+    $r = Invoke-Setup $oldBait @('/S', "/D=$oldTarget") -WorkingDirectory (Split-Path $oldBait)
+    Check ($r.ExitCode -eq 0) "Exitcode 0 (war $($r.ExitCode))"
+    Show-BaitLog
+    Check (Test-Path -LiteralPath $baitLog) "Gegenprobe: Das veröffentlichte Setup $oldVersion startet einen Köder"
+    Remove-Item -LiteralPath $baitLog
+    Start-Process -FilePath (Join-Path $oldTarget 'uninstall.exe') -ArgumentList '/S' -Wait
+    Wait-Gone $oldTarget
+
+    # Das gebaute Setup, frische Installation.
+    $newBait = New-BaitFolder 'koeder-neu' $setup
+    $target = Join-Path $work 'koeder-neu-ziel'
+    $r = Invoke-Setup $newBait @('/S', "/D=$target") -WorkingDirectory (Split-Path $newBait)
+    Check ($r.ExitCode -eq 0) "Exitcode 0 (war $($r.ExitCode))"
+    Check (Test-Path (Join-Path $target 'WidgetTea.exe')) 'Die Installation ist vollständig'
+    Show-BaitLog
+    Check (-not (Test-Path -LiteralPath $baitLog)) 'Das Setup hat keinen Köder gestartet'
+
+    # Dasselbe, während im Zielordner ein Programm namens WidgetTea.exe läuft. Jetzt muss das Setup es beenden,
+    # ruft also auch taskkill auf.
+    Copy-Item -LiteralPath $sleeperExe -Destination (Join-Path $target 'WidgetTea.exe') -Force
+    $sleeper = Start-Process -FilePath (Join-Path $target 'WidgetTea.exe') -PassThru -WindowStyle Hidden
+    $null = $sleeper.Handle
+    Start-Sleep -Seconds 1
+    Check (-not $sleeper.HasExited) 'Im Zielordner läuft ein Programm namens WidgetTea.exe'
+    $r = Invoke-Setup $newBait @('/S', "/D=$target") -WorkingDirectory (Split-Path $newBait)
+    Check ($r.ExitCode -eq 0) "Exitcode 0 (war $($r.ExitCode))"
+    Check ($sleeper.WaitForExit(5000)) 'Das Setup hat das laufende Programm beendet'
+    Check ((Get-Item (Join-Path $target 'WidgetTea.exe')).VersionInfo.ProductVersion -like "$version*") 'Im Zielordner liegt wieder das echte Programm'
+    Show-BaitLog
+    Check (-not (Test-Path -LiteralPath $baitLog)) 'Auch dabei hat das Setup keinen Köder gestartet'
+
+    Start-Process -FilePath (Join-Path $target 'uninstall.exe') -ArgumentList '/S' -Wait
+    Wait-Gone $target
+    Check (-not (Test-Path $target)) 'Die Deinstallation entfernt den Ordner'
+    Check (-not (Test-Path $regKey)) 'Die Registry-Einträge sind weg'
+}
+finally {
+    Remove-Item Env:WIDGETTEA_KOEDER -ErrorAction SilentlyContinue
+    if ($sleeper -and -not $sleeper.HasExited) { Stop-Process -Id $sleeper.Id -Force -ErrorAction SilentlyContinue }
+}
+
+# Und im Quelltext: Jeder Aufruf eines Programms nennt es mit vollem Pfad.
+$calls = @(Get-ChildItem -LiteralPath (Join-Path $root 'installer') -Recurse -File -Include '*.nsi', '*.nsh' |
+    Select-String -Pattern '^\s*(nsExec::\w+|Exec|ExecWait)\s+''(.+)''\s*$')
+Check ($calls.Count -ge 4) "Aufrufe von Programmen im Quelltext des Setups gefunden: $($calls.Count)"
+$bare = @($calls | Where-Object { $_.Matches[0].Groups[2].Value -notmatch '^"(\$(SYSDIR|WINDIR|LOCALAPPDATA)\\|\$\{DOTNET_WINGET_EXE\}")' })
+foreach ($b in $bare) { Write-Host "       $($b.Filename):$($b.LineNumber): $($b.Line.Trim())" }
+Check ($bare.Count -eq 0) 'Jeder davon nennt das Programm mit vollem Pfad'
+$wingetDefault = Select-String -LiteralPath (Join-Path $root 'installer\DotnetRuntime.nsh') -Pattern '^\s*!define DOTNET_WINGET_EXE "(.+)"' | Select-Object -First 1
+Check ($wingetDefault -and $wingetDefault.Matches[0].Groups[1].Value -like '$LOCALAPPDATA\*') 'winget steht in der Vorgabe mit vollem Pfad'
+
+# winget ruft das Setup über seinen festen Ort im Benutzerprofil auf. Ob nsExec es von dort starten kann, zeigt ein
+# Probe-Setup mit genau diesem Aufruf. Gibt es winget auf diesem Rechner nicht, muss nsExec das als "error" melden
+# und trotzdem zwei Werte auf den Stapel legen, denn das Setup holt zwei herunter.
+$probeNsi = Join-Path $work 'winget-probe.nsi'
+$probeExe = Join-Path $work 'winget-probe.exe'
+$probeOut = Join-Path $work 'winget-probe.txt'
+Set-Content -LiteralPath $probeNsi -Encoding ascii -Value @'
+Unicode true
+RequestExecutionLevel user
+SilentInstall silent
+OutFile "${OUTFILE}"
+Section
+  Push "unten"
+  nsExec::ExecToStack '"$LOCALAPPDATA\Microsoft\WindowsApps\winget.exe" --version'
+  Pop $1
+  Pop $0
+  Pop $3
+  FileOpen $2 "${RESULT}" w
+  FileWrite $2 "$1|$0|$3"
+  FileClose $2
+SectionEnd
+'@
+& $makensis /V2 "/DOUTFILE=$probeExe" "/DRESULT=$probeOut" $probeNsi | Out-Null
+if ($LASTEXITCODE) { throw 'makensis (winget-Probe) fehlgeschlagen' }
+Start-Process -FilePath $probeExe -Wait
+$probe = ((Get-Content -LiteralPath $probeOut -Raw) -replace '\s+', ' ').Trim()
+if (Test-Path -LiteralPath (Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\winget.exe')) {
+    Check ($probe -match '^0\|v?\d+\.\d+.*\|unten$') "winget ist vorhanden und antwortet über den festen Pfad: $probe"
+} else {
+    Check ($probe -match '^error\|\|unten$') "winget fehlt auf diesem Rechner, und nsExec meldet das als error: $probe"
+}
+
+# ---------------------------------------------------------------- 11 Laufende App gezielt erkennen
+
+Step '11 Das Setup erkennt die laufende App an ihr selbst, nicht am Programmnamen'
+# Zwei Stellvertreter: Der Schläfer aus Stufe 10 heißt nur WidgetTea.exe. Der Halter hält zusätzlich den Mutex,
+# mit dem die App eine zweite Instanz verhindert, und gilt dem Setup deshalb als laufendes WidgetTea.
+$holderExe = Join-Path $work 'halter.exe'
+Set-Content -LiteralPath (Join-Path $work 'halter.cs') -Encoding ascii -Value @'
+public static class Halter
+{
+    public static void Main()
+    {
+        bool created;
+        using (new System.Threading.Mutex(true, @"Local\WidgetTea.SingleInstance", out created))
+        {
+            System.Threading.Thread.Sleep(600000);
+        }
+    }
+}
+'@
+& $csc /nologo "/out:$holderExe" (Join-Path $work 'halter.cs') | Out-Null
+if ($LASTEXITCODE) { throw 'Der Halter ließ sich nicht übersetzen' }
+
+# Testfassung des Setups, die nichts beendet: An ihr zeigt sich, dass das Setup aufgibt.
+$setupNoKill = Join-Path $work 'WidgetTea-beendet-nichts-setup.exe'
+& $makensis /V2 /INPUTCHARSET UTF8 "/DVERSION=$version" "/DSRCDIR=$publishDir" "/DOUTFILE=$setupNoKill" `
+    '/DCLOSE_APP_NO_KILL=1' (Join-Path $root 'installer\WidgetTea.nsi')
+if ($LASTEXITCODE) { throw 'makensis (Testfassung ohne Beenden) fehlgeschlagen' }
+
+# Startet einen Stellvertreter unter dem Namen WidgetTea.exe aus dem angegebenen Ordner.
+function Start-StandIn([string]$Program, [string]$Folder) {
+    New-Item -ItemType Directory -Force $Folder | Out-Null
+    Copy-Item -LiteralPath $Program -Destination (Join-Path $Folder 'WidgetTea.exe') -Force
+    $p = Start-Process -FilePath (Join-Path $Folder 'WidgetTea.exe') -PassThru -WindowStyle Hidden
+    $null = $p.Handle
+    Start-Sleep -Seconds 1
+    if ($p.HasExited) { throw "[$script:stage] Der Stellvertreter in $Folder hat sich sofort beendet" }
+    $p
+}
+
+$target = Join-Path $work 'gezielt'
+$standIns = [System.Collections.Generic.List[System.Diagnostics.Process]]::new()
+try {
+    # a) Ein fremdes Programm gleichen Namens in einem anderen Ordner geht das Setup nichts an.
+    $stranger = Start-StandIn $sleeperExe (Join-Path $work 'fremdes-programm')
+    $standIns.Add($stranger)
+    $r = Invoke-Setup $setup @('/S', "/D=$target") -TimeoutSec 120
+    Check ($r.ExitCode -eq 0) "Exitcode 0 (war $($r.ExitCode))"
+    Check ((Get-Item (Join-Path $target 'WidgetTea.exe')).VersionInfo.ProductVersion -like "$version*") 'Die Installation ist vollständig'
+    Check (-not $stranger.HasExited) 'Das fremde Programm gleichen Namens läuft weiter'
+    Stop-Process -Id $stranger.Id -Force
+
+    # b) Ein WidgetTea aus einem anderen Ordner (zweite Installation) hält den Mutex der App und wird beendet.
+    $second = Start-StandIn $holderExe (Join-Path $work 'zweite-installation')
+    $standIns.Add($second)
+    $r = Invoke-Setup $setup @('/S', "/D=$target") -TimeoutSec 120
+    Check ($r.ExitCode -eq 0) "Exitcode 0 (war $($r.ExitCode))"
+    Check ($second.WaitForExit(5000)) 'Das laufende WidgetTea aus dem anderen Ordner wurde beendet'
+
+    # c) Lässt sich die App nicht beenden, gibt das Setup auf, statt endlos zu wiederholen.
+    $blocker = Start-StandIn $sleeperExe $target
+    $standIns.Add($blocker)
+    $before = Get-Snapshot $target
+    $watch = [System.Diagnostics.Stopwatch]::StartNew()
+    $r = Invoke-Setup $setupNoKill @('/S', "/D=$target") -TimeoutSec 120
+    $watch.Stop()
+    Check ($r.ExitCode -eq 2) "Exitcode 2, abgebrochen (war $($r.ExitCode))"
+    Write-Host "       aufgegeben nach $([int]$watch.Elapsed.TotalSeconds) s"
+    Check (-not $blocker.HasExited) 'Das Programm im Zielordner läuft noch'
+    Check (Test-SameSnapshot $before (Get-Snapshot $target)) 'Am Installationsordner hat sich nichts geändert'
+    Stop-Process -Id $blocker.Id -Force
+    $blocker.WaitForExit(5000) | Out-Null
+
+    # d) Die Deinstallation beendet die laufende App und räumt auf.
+    $r = Invoke-Setup $setup @('/S', "/D=$target") -TimeoutSec 120
+    Check ($r.ExitCode -eq 0) "Exitcode 0 (war $($r.ExitCode))"
+    $running = Start-StandIn $holderExe $target
+    $standIns.Add($running)
+    Start-Process -FilePath (Join-Path $target 'uninstall.exe') -ArgumentList '/S' -Wait
+    Wait-Gone $target
+    Check ($running.WaitForExit(5000)) 'Die Deinstallation hat die laufende App beendet'
+    Check (-not (Test-Path $target)) 'Die Deinstallation entfernt den Ordner'
+    Check (-not (Test-Path $regKey)) 'Die Registry-Einträge sind weg'
+}
+finally {
+    foreach ($p in $standIns) {
+        if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+# ---------------------------------------------------------------- 12 Wegfallende Dateien
+
+Step '12 Dateien, die in der neuen Fassung wegfallen, verschwinden beim Update'
+# Als „frühere Fassung" dient dasselbe Programm mit drei Dateien mehr. Das gebaute Setup kennt sie nicht; es
+# erfährt von ihnen nur aus der Dateiliste, die das frühere Setup im Installationsordner hinterlassen hat.
+$earlierPayload = Join-Path $work 'programm-frueher'
+Copy-Item -LiteralPath $publishDir -Destination $earlierPayload -Recurse
+Set-Content -LiteralPath (Join-Path $earlierPayload 'alte-bibliothek.dll') -Value 'fällt später weg' -Encoding utf8
+New-Item -ItemType Directory -Force (Join-Path $earlierPayload 'alt'), (Join-Path $earlierPayload 'alt-leer') | Out-Null
+Set-Content -LiteralPath (Join-Path $earlierPayload 'alt\daten.bin') -Value 'auch' -Encoding utf8
+Set-Content -LiteralPath (Join-Path $earlierPayload 'alt-leer\rest.bin') -Value 'auch' -Encoding utf8
+$setupEarlier = Join-Path $work 'WidgetTea-frueher-setup.exe'
+& $makensis /V2 /INPUTCHARSET UTF8 "/DVERSION=$version" "/DSRCDIR=$earlierPayload" "/DOUTFILE=$setupEarlier" (Join-Path $root 'installer\WidgetTea.nsi')
+if ($LASTEXITCODE) { throw 'makensis (frühere Fassung) fehlgeschlagen' }
+
+$target = Join-Path $work 'wegfall'
+$manifest = Join-Path $target 'WidgetTea-installed-files.txt'
+$r = Invoke-Setup $setupEarlier @('/S', "/D=$target")
+Check ($r.ExitCode -eq 0) "Exitcode 0 (war $($r.ExitCode))"
+$listed = @(Get-Content -LiteralPath $manifest)
+Write-Host "       Dateiliste der früheren Fassung: $($listed -join ', ')"
+Check ($listed[0] -ceq 'WidgetTea installed files 1') 'Die Liste beginnt mit der Kennzeile'
+foreach ($entry in 'WidgetTea.exe', 'alte-bibliothek.dll', 'alt\daten.bin', 'alt-leer\rest.bin', 'LICENSE.txt', 'alt\', 'alt-leer\') {
+    Check ($listed -contains $entry) "Die Liste nennt $entry"
+}
+# Fremdes dazu: eine DLL im Hauptordner und eine Datei in einem Ordner, den die frühere Fassung angelegt hat.
+Set-Content -LiteralPath (Join-Path $target 'meine.dll') -Value 'fremd' -Encoding utf8
+Set-Content -LiteralPath (Join-Path $target 'alt\meins.txt') -Value 'fremd' -Encoding utf8
+
+$r = Invoke-Setup $setup @('/S', "/D=$target")
+Check ($r.ExitCode -eq 0) "Exitcode 0 (war $($r.ExitCode))"
+Check (-not (Test-Path (Join-Path $target 'alte-bibliothek.dll'))) 'Die weggefallene Datei im Hauptordner ist weg'
+Check (-not (Test-Path (Join-Path $target 'alt\daten.bin'))) 'Die weggefallene Datei im Unterordner ist weg'
+Check (-not (Test-Path (Join-Path $target 'alt-leer'))) 'Der Ordner, der danach leer war, ist weg'
+Check (Test-Path (Join-Path $target 'alt\meins.txt')) 'Die fremde Datei im Unterordner ist noch da, der Ordner also auch'
+Check (Test-Path (Join-Path $target 'meine.dll')) 'Die fremde DLL im Hauptordner ist noch da'
+Check ((Get-Item (Join-Path $target 'WidgetTea.exe')).VersionInfo.ProductVersion -like "$version*") 'Das Programm ist vollständig installiert'
+$listed = @(Get-Content -LiteralPath $manifest)
+Check (-not ($listed -contains 'alte-bibliothek.dll')) 'Die neue Dateiliste nennt die weggefallene Datei nicht mehr'
+
+# Eine Liste, die aus dem Ordner hinausweist oder mehr als eine Datei meint, wird an diesen Stellen nicht befolgt.
+$outside = Join-Path $work 'draussen.txt'
+Set-Content -LiteralPath $outside -Value 'liegt außerhalb' -Encoding utf8
+Add-Content -LiteralPath $manifest -Encoding ascii -Value '..\draussen.txt', $outside, '*.dll', '\draussen.txt', 'alt\..\..\draussen.txt'
+$r = Invoke-Setup $setup @('/S', "/D=$target")
+Check ($r.ExitCode -eq 0) "Exitcode 0 (war $($r.ExitCode))"
+Check (Test-Path -LiteralPath $outside) 'Die Datei außerhalb des Installationsordners ist noch da'
+Check (Test-Path (Join-Path $target 'meine.dll')) 'Der Platzhalter *.dll hat die fremde DLL nicht getroffen'
+
+# Eine Datei dieses Namens ohne die Kennzeile stammt nicht vom Setup, etwa von einem anderen Programm im selben
+# Ordner. Sie wird gar nicht befolgt, auch nicht für schlichte Pfade.
+Set-Content -LiteralPath $manifest -Encoding ascii -Value 'meine.dll', 'alt\meins.txt'
+$r = Invoke-Setup $setup @('/S', "/D=$target")
+Check ($r.ExitCode -eq 0) "Exitcode 0 (war $($r.ExitCode))"
+Check ((Test-Path (Join-Path $target 'meine.dll')) -and (Test-Path (Join-Path $target 'alt\meins.txt'))) 'Eine Liste ohne Kennzeile wird nicht befolgt'
+Check ((Get-Content -LiteralPath $manifest -TotalCount 1) -ceq 'WidgetTea installed files 1') 'Danach liegt dort wieder die Liste des Setups'
+
+Start-Process -FilePath (Join-Path $target 'uninstall.exe') -ArgumentList '/S' -Wait
+Wait-Gone (Join-Path $target 'uninstall.exe')
+$left = @(Get-ChildItem -LiteralPath $target -Recurse -File | ForEach-Object { $_.FullName.Substring($target.Length + 1) })
+Write-Host "       Übrig: $($left -join ', ')"
+Check (-not (Compare-Object -ReferenceObject @('alt\meins.txt', 'meine.dll') -DifferenceObject $left)) 'Nach der Deinstallation liegen dort nur noch die fremden Dateien'
+Check (-not (Test-Path $regKey)) 'Die Registry-Einträge sind weg'
+
+# ---------------------------------------------------------------- 13 Gescheitertes Selbst-Update
+
+Step '13 Scheitert die Installation beim Selbst-Update, startet das Setup die App wieder'
+# Die Testfassung aus Stufe 11, die nichts beendet, scheitert an der laufenden App. Mit /RESTART muss das Setup
+# danach die App starten. Der Aufruf trifft hier den Stellvertreter: Von ihm läuft dann eine zweite Instanz.
+$target = Join-Path $work 'neustart'
+$targetExe = Join-Path $target 'WidgetTea.exe'
+# Beim Aufruf in @( ) setzen: Eine Funktion gibt ein einzelnes Ergebnis nicht als Liste zurück.
+function Get-TargetProcesses { Get-Process -Name 'WidgetTea' -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $targetExe } }
+try {
+    $r = Invoke-Setup $setup @('/S', "/D=$target")
+    Check ($r.ExitCode -eq 0) "Exitcode 0 (war $($r.ExitCode))"
+    Start-StandIn $sleeperExe $target | Out-Null
+    Check (@(Get-TargetProcesses).Count -eq 1) 'Im Zielordner läuft die App (ein Stellvertreter)'
+
+    $r = Invoke-Setup $setupNoKill @('/S', '/RESTART', "/D=$target") -TimeoutSec 180
+    Check ($r.ExitCode -eq 2) "Exitcode 2, abgebrochen (war $($r.ExitCode))"
+    $deadline = (Get-Date).AddSeconds(30)
+    while (@(Get-TargetProcesses).Count -lt 2 -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 500 }
+    Check (@(Get-TargetProcesses).Count -ge 2) 'Das Setup hat die App nach dem Scheitern wieder gestartet'
+}
+finally {
+    Get-TargetProcesses | ForEach-Object { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue }
+}
+Start-Sleep -Seconds 1
+$r = Invoke-Setup $setup @('/S', "/D=$target")
+Check ($r.ExitCode -eq 0) "Exitcode 0 (war $($r.ExitCode))"
+Start-Process -FilePath (Join-Path $target 'uninstall.exe') -ArgumentList '/S' -Wait
+Wait-Gone $target
+Check (-not (Test-Path $target)) 'Die Deinstallation entfernt den Ordner'
+
+# ---------------------------------------------------------------- 14 Der Weg nach „Ja"
+
+Step '14 Laufzeit fehlt, Antwort Ja: winget oder der Ausweichweg'
+# Zwei weitere Testfassungen. Beide verlangen eine Laufzeit, die es nicht gibt, warten kurz und öffnen keinen
+# Browser. Der einen fehlt winget (sie sucht es an einem Ort, den es nicht gibt), die andere soll über winget ein
+# Paket installieren, das es nicht gibt. Am Rechner ändert sich dabei nichts.
+$retryTimeout = 10
+$common = @('/V2', '/INPUTCHARSET', 'UTF8', "/DVERSION=$version", "/DSRCDIR=$publishDir", '/DDOTNET_MINPATCH=999',
+    "/DDOTNET_ASK_TIMEOUT=$askTimeout", "/DDOTNET_RETRY_TIMEOUT=$retryTimeout", '/DDOTNET_URL=')
+$setupNoWinget = Join-Path $work 'WidgetTea-ohne-winget-setup.exe'
+& $makensis @common "/DOUTFILE=$setupNoWinget" '/DDOTNET_WINGET_EXE=C:\gibt-es-nicht\winget.exe' (Join-Path $root 'installer\WidgetTea.nsi')
+if ($LASTEXITCODE) { throw 'makensis (Testfassung ohne winget) fehlgeschlagen' }
+$setupWingetFails = Join-Path $work 'WidgetTea-winget-scheitert-setup.exe'
+& $makensis @common "/DOUTFILE=$setupWingetFails" '/DDOTNET_WINGET=WidgetTea.Pruefung.GibtEsNicht' (Join-Path $root 'installer\WidgetTea.nsi')
+if ($LASTEXITCODE) { throw 'makensis (Testfassung mit unbekanntem Paket) fehlgeschlagen' }
+
+$nowhere = Join-Path $work 'nirgends'
+$ask = 'Jetzt installieren?'
+$banner = 'Windows-Abfrage bitte'
+$retry = 'wird von Microsoft heruntergeladen'
+
+# a) Ohne winget: kein Hinweis auf die Windows-Abfrage, gleich „Wiederholen/Abbrechen".
+$r = Invoke-Setup $setupNoWinget @('/S', '/RESTART', "/D=$nowhere") ([ordered]@{
+    $ask    = @('Yes', 'Ja')
+    $banner = @()
+    $retry  = @('Cancel', 'Abbrechen')
+})
+Check ($r.ExitCode -eq 3) "Exitcode 3 (war $($r.ExitCode))"
+Check ($r.Seen -contains $retry) 'Nach Ja kam „Wiederholen/Abbrechen"'
+Check (-not ($r.Seen -contains $banner)) 'winget wurde nicht aufgerufen (es fehlt)'
+Check (-not (Test-Path $nowhere)) 'Installiert wurde nichts'
+
+# b) Dasselbe, und niemand antwortet auf „Wiederholen/Abbrechen": Es wartet nicht ewig.
+$r = Invoke-Setup $setupNoWinget @('/S', '/RESTART', "/D=$nowhere") ([ordered]@{
+    $ask   = @('Yes', 'Ja')
+    $retry = @()
+}) -TimeoutSec 120
+Check ($r.ExitCode -eq 3) "Exitcode 3 (war $($r.ExitCode))"
+$stood = [int]((Get-Date) - $r.SeenAt[$retry]).TotalSeconds
+Check ($stood -ge ($retryTimeout - 2) -and $stood -le ($retryTimeout + 20)) "Wiederholen/Abbrechen verschwand nach dem Zeitablauf von selbst (stand etwa $stood s, eingestellt $retryTimeout s)"
+Check (-not (Test-Path $nowhere)) 'Installiert wurde nichts'
+
+# c) Mit winget: Das Setup ruft es auf (der Hinweis auf die Windows-Abfrage steht währenddessen da). Das Paket gibt
+#    es nicht, also geht es danach zu „Wiederholen/Abbrechen".
+if (Test-Path -LiteralPath (Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\winget.exe')) {
+    $r = Invoke-Setup $setupWingetFails @('/S', '/RESTART', "/D=$nowhere") ([ordered]@{
+        $ask    = @('Yes', 'Ja')
+        $banner = @()
+        $retry  = @('Cancel', 'Abbrechen')
+    }) -TimeoutSec 600
+    Check ($r.ExitCode -eq 3) "Exitcode 3 (war $($r.ExitCode))"
+    Check ($r.Seen -contains $banner) 'Das Setup hat winget aufgerufen und währenddessen den Hinweis gezeigt'
+    Check ($r.Seen -contains $retry) 'Nach dem Scheitern von winget kam „Wiederholen/Abbrechen"'
+    Write-Host "       winget lief etwa $([int]($r.SeenAt[$retry] - $r.SeenAt[$banner]).TotalSeconds) s"
+    Check (-not (Test-Path $nowhere)) 'Installiert wurde nichts'
+} else {
+    Note 'winget fehlt auf diesem Rechner, der Aufruf über winget ist hier nicht zu prüfen'
+}
 
 Write-Host "`nAlle Installer-Prüfungen bestanden." -ForegroundColor Green
