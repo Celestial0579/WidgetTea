@@ -114,7 +114,7 @@ Var Restart
 !define MUI_FINISHPAGE_RUN_TEXT "WidgetTea jetzt starten"
 
 !define MUI_WELCOMEPAGE_TITLE "Willkommen bei WidgetTea"
-!define MUI_WELCOMEPAGE_TEXT "WidgetTea zeigt deine Contributions aus Gitea als Heatmap direkt auf dem Desktop – auch offline mit dem zuletzt geladenen Stand.$\r$\n$\r$\nDie Installation erfolgt nur für dein Benutzerkonto und braucht keine Administratorrechte. Updates holt sich WidgetTea später selbst.$\r$\n$\r$\nKlicke auf „Weiter“, um fortzufahren."
+!define MUI_WELCOMEPAGE_TEXT "WidgetTea zeigt deine Contributions aus Gitea als Heatmap direkt auf dem Desktop – auch offline mit dem zuletzt geladenen Stand.$\r$\n$\r$\nDie Installation erfolgt nur für dein Benutzerkonto und braucht keine Administratorrechte, sobald die .NET Desktop Runtime 10 vorhanden ist. Updates holt sich WidgetTea später selbst.$\r$\n$\r$\nKlicke auf „Weiter“, um fortzufahren."
 !define MUI_COMPONENTSPAGE_TEXT_TOP "Wähle aus, was installiert werden soll."
 !define MUI_DIRECTORYPAGE_TEXT_TOP "WidgetTea wird in folgendes Verzeichnis installiert. Du kannst auch ein anderes wählen."
 !define MUI_FINISHPAGE_TITLE "WidgetTea ist bereit"
@@ -139,7 +139,7 @@ Var Restart
 ; Wartet, bis WidgetTea beendet ist (Dateien wären sonst gesperrt).
 ; Beim Update (/RESTART) beendet sich die App gerade selbst → bis zu 15 s still warten.
 ; Bei einer normalen Installation wird das laufende Widget nach Rückfrage beendet.
-!macro CLOSE_APP_FUNC un
+!macro CLOSE_APP_FUNC un WOFUER
 Function ${un}CloseRunningApp
   StrCpy $R8 0
   retry:
@@ -154,7 +154,7 @@ Function ${un}CloseRunningApp
         Goto retry
       ${EndIf}
       MessageBox MB_OKCANCEL|MB_ICONEXCLAMATION \
-        "WidgetTea läuft gerade und wird für die Installation beendet." \
+        "WidgetTea läuft gerade und wird für die ${WOFUER} beendet." \
         /SD IDOK IDOK kill
       Abort
       kill:
@@ -166,8 +166,8 @@ Function ${un}CloseRunningApp
     ${EndIf}
 FunctionEnd
 !macroend
-!insertmacro CLOSE_APP_FUNC ""
-!insertmacro CLOSE_APP_FUNC "un."
+!insertmacro CLOSE_APP_FUNC "" "Installation"
+!insertmacro CLOSE_APP_FUNC "un." "Deinstallation"
 
 Function LaunchApp
   ; Über explorer.exe starten, damit die App nie die Rechte des Setups erbt.
