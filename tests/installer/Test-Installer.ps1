@@ -21,9 +21,13 @@
        Ordner bleiben, App startet, automatische Updates sind wieder an.
     6  Dasselbe Ablehnen auf der neuen Fassung, danach hat „die App“ die Einstellungen neu gespeichert.
     7  Update neu → neu: nichts wird aufgeräumt, automatische Updates sind wieder an.
+    8  /S /RESTART ohne passende Laufzeit, und niemand antwortet: Nach dem Zeitablauf läuft das Widget wieder,
+       während der Hinweis noch auf dem Schirm steht; automatische Updates sind aus wie bei „Nein“.
+    9  Deinstallation mit fremden Dateien im Ordner: Weg ist nur, was das Setup installiert hat.
 
-  Für 3, 4 und 6 wird das Setup ein zweites Mal gebaut, mit einer Mindestversion der Laufzeit, die es nicht
-  gibt (/DDOTNET_MINPATCH=999). So lässt sich „Laufzeit fehlt“ auf einem Rechner prüfen, der sie hat.
+  Für 3, 4, 6 und 8 wird das Setup ein zweites Mal gebaut, mit einer Mindestversion der Laufzeit, die es nicht
+  gibt (/DDOTNET_MINPATCH=999), und mit kurzem Zeitablauf der Nachfrage. So lässt sich „Laufzeit fehlt“ auf
+  einem Rechner prüfen, der sie hat.
 
 .PARAMETER Force
   Läuft auch außerhalb der CI. Nur auf einem Wegwerf-Rechner benutzen.
@@ -54,6 +58,7 @@ $settingsFile = Join-Path $settingsDir 'settings.json'
 $regKey = 'HKCU:\Software\WidgetTea'
 $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
 $oldVersion = '1.0.0'
+$askTimeout = 10   # Sekunden, die die Nachfrage der Testfassung auf eine Antwort wartet (im echten Setup 120)
 $oldSetupUrl = "https://github.com/Celestial0579/WidgetTea/releases/download/v$oldVersion/WidgetTea-$oldVersion-setup.exe"
 
 if (-not (Test-Path $setup)) { throw "Setup fehlt: $setup – erst build\release.ps1 laufen lassen." }
@@ -160,7 +165,9 @@ function Stop-App {
 }
 
 # Startet ein Setup und wartet. Nachfragen werden laut $Answers beantwortet: Schlüssel = Text, der im Fenster
-# stehen muss, Wert = Kennung des Knopfes. Ein unerwartetes Fenster oder eine Zeitüberschreitung ist ein Fehler.
+# stehen muss, Wert = Beschriftungen des Knopfes. Eine leere Liste lässt das Fenster unbeantwortet stehen;
+# ein Skriptblock wird erst ausgeführt und liefert dann die Beschriftungen (für Prüfungen, solange das Fenster
+# noch offen ist). Ein unerwartetes Fenster oder eine Zeitüberschreitung ist ein Fehler.
 function Invoke-Setup {
     param(
         [string]$Exe,
@@ -172,6 +179,7 @@ function Invoke-Setup {
     $p = Start-Process -FilePath $Exe -ArgumentList $Arguments -PassThru
     $null = $p.Handle   # sonst ist ExitCode nach dem Ende leer
     $seen = [System.Collections.Generic.List[string]]::new()
+    $seenAt = @{}
     $done = @{}
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     while (-not $p.WaitForExit(250)) {
@@ -184,15 +192,23 @@ function Invoke-Setup {
                 Stop-Process -Id $p.Id -Force
                 throw "[$script:stage] Unerwartete Nachfrage des Setups: $text"
             }
-            $captions = [string[]]$Answers[$key]
+            $done[$id] = $true
+            $seen.Add($key)
+            $seenAt[$key] = Get-Date
             # Keine typografischen Anführungszeichen in doppelt begrenzten Zeichenketten: PowerShell liest sie als Begrenzer.
-            Write-Host "   ?   $($text.Substring(0, [Math]::Min(150, $text.Length)).Replace("`r`n", ' ')) ...  ->  Knopf $($captions[0])"
+            $shown = $text.Substring(0, [Math]::Min(150, $text.Length)).Replace("`r`n", ' ')
+            $answer = $Answers[$key]
+            if ($answer -is [scriptblock]) { $answer = & $answer }
+            $captions = [string[]]@($answer)
+            if ($captions.Count -eq 0) {
+                Write-Host "   ?   $shown ...  ->  bleibt unbeantwortet"
+                continue
+            }
+            Write-Host "   ?   $shown ...  ->  Knopf $($captions[0])"
             if (-not [WtDialogs]::PressButton($h, $captions)) {
                 Stop-Process -Id $p.Id -Force
                 throw "[$script:stage] Kein Knopf $($captions -join ' / ') in der Nachfrage: $text"
             }
-            $done[$id] = $true
-            $seen.Add($key)
         }
         if ((Get-Date) -gt $deadline) {
             $open = ([WtDialogs]::Find($p.Id) | ForEach-Object { [WtDialogs]::Text($_) }) -join ' || '
@@ -200,7 +216,7 @@ function Invoke-Setup {
             throw "[$script:stage] Setup lief nach $TimeoutSec s noch. Offene Fenster: $open"
         }
     }
-    [pscustomobject]@{ ExitCode = $p.ExitCode; Seen = $seen }
+    [pscustomobject]@{ ExitCode = $p.ExitCode; Seen = $seen; SeenAt = $seenAt }
 }
 
 # Relativer Pfad, Größe und SHA-256 jeder Datei – für „hat sich nichts geändert“.
@@ -271,7 +287,7 @@ $makensis = @("${env:ProgramFiles(x86)}\NSIS\makensis.exe", "$env:ProgramFiles\N
 if (-not $makensis) { throw 'NSIS nicht gefunden' }
 $setupNoRuntime = Join-Path $work 'WidgetTea-ohne-passende-Laufzeit-setup.exe'
 & $makensis /V2 /INPUTCHARSET UTF8 "/DVERSION=$version" "/DSRCDIR=$publishDir" "/DOUTFILE=$setupNoRuntime" `
-    '/DDOTNET_MINPATCH=999' (Join-Path $root 'installer\WidgetTea.nsi')
+    '/DDOTNET_MINPATCH=999' "/DDOTNET_ASK_TIMEOUT=$askTimeout" (Join-Path $root 'installer\WidgetTea.nsi')
 if ($LASTEXITCODE) { throw 'makensis (Testfassung) fehlgeschlagen' }
 Ok 'Testfassung des Setups gebaut (verlangt eine Laufzeit, die es nicht gibt)'
 
@@ -426,5 +442,50 @@ Check (Test-SameSnapshot $foreignBefore (Get-Snapshot (Join-Path $dir 'eigener-o
 Check ((Read-Settings) -ceq $settingsOriginal.Replace('"autoUpdate": true', '"autoUpdate": true ')) 'Automatische Updates sind wieder an, sonst ist nichts geändert'
 Check ((Get-AutoUpdate) -eq $true) 'Die Datei ist gültiges JSON'
 Check (-not (Test-Marker)) 'Der Merker ist gelöscht'
+
+# ---------------------------------------------------------------- 8 Niemand antwortet
+
+Step "8 /S /RESTART ohne passende Laufzeit, niemand antwortet (Zeitablauf $askTimeout s)"
+Write-Settings $settingsOriginal
+$before = Get-Snapshot $dir
+$script:runningWhileHintOpen = $false
+$timeoutAnswers = [ordered]@{
+    'Auf die Nachfrage kam keine Antwort' = {
+        # Der Hinweis steht noch auf dem Schirm. Das Widget muss trotzdem schon wieder laufen – sonst bliebe es
+        # geschlossen, bis jemand zurückkommt.
+        $limit = (Get-Date).AddSeconds(30)
+        while (-not (Get-Process -Name 'WidgetTea' -ErrorAction SilentlyContinue) -and (Get-Date) -lt $limit) { Start-Sleep -Milliseconds 500 }
+        $script:runningWhileHintOpen = [bool](Get-Process -Name 'WidgetTea' -ErrorAction SilentlyContinue)
+        @('OK')
+    }
+    'Jetzt installieren?'                 = @()   # niemand antwortet
+}
+$r = Invoke-Setup $setupNoRuntime @('/S', '/RESTART') -Answers $timeoutAnswers -TimeoutSec 180
+$settingsNow = Read-Settings
+Stop-App
+Check ($r.ExitCode -eq 3) "Exitcode 3 (war $($r.ExitCode))"
+Check ($r.Seen -contains 'Jetzt installieren?') 'Das Setup hat nachgefragt'
+Check ($r.Seen -contains 'Auf die Nachfrage kam keine Antwort') 'Nach dem Zeitablauf sagt das Setup, was geschehen ist'
+$waited = ($r.SeenAt['Auf die Nachfrage kam keine Antwort'] - $r.SeenAt['Jetzt installieren?']).TotalSeconds
+Check ($waited -ge ($askTimeout - 2) -and $waited -le ($askTimeout + 20)) "Die Nachfrage blieb etwa $askTimeout s stehen (gemessen: $([int]$waited) s)"
+Check $script:runningWhileHintOpen 'Das Widget lief schon wieder, während der Hinweis noch offen war'
+Check (Test-SameSnapshot $before (Get-Snapshot $dir)) 'Die vorhandene Installation ist Byte für Byte unverändert'
+Check ($settingsNow -ceq $settingsOriginal.Replace('"autoUpdate": true', '"autoUpdate":false')) 'Automatische Updates sind ausgesetzt wie bei Nein'
+Check (Test-Marker) 'Der Merker ist gesetzt'
+
+# ---------------------------------------------------------------- 9 Deinstallation, fremde Dateien bleiben
+
+Step '9 Deinstallation mit fremden Dateien im Ordner'
+Start-Process -FilePath (Join-Path $dir 'uninstall.exe') -ArgumentList '/S' -Wait
+$deadline = (Get-Date).AddSeconds(60)
+while ((Test-Path (Join-Path $dir 'uninstall.exe')) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 500 }
+$left = @(Get-ChildItem -LiteralPath $dir -Recurse -File | ForEach-Object { $_.FullName.Substring($dir.Length + 1) } | Sort-Object)
+Write-Host "       Übrig: $($left -join ', ')"
+Check (($left -join '|') -ceq 'eigener-ordner\daten.txt|meine-notizen.txt') 'Im Ordner liegen nur noch die fremden Dateien'
+Check (Test-SameSnapshot $foreignBefore (Get-Snapshot (Join-Path $dir 'eigener-ordner'))) 'Der fremde Unterordner ist unverändert'
+Check (-not (Test-Path $regKey)) 'Die Registry-Einträge sind weg'
+Check (-not (Get-ItemProperty -Path $runKey -Name 'WidgetTea' -ErrorAction SilentlyContinue)) 'Der Autostart ist weg'
+Check (-not (Test-Path (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\WidgetTea.lnk'))) 'Die Verknüpfung im Startmenü ist weg'
+Check (Test-Path -LiteralPath $settingsFile) 'Die Einstellungen des Nutzers bleiben liegen (Benutzerdaten nicht abgewählt)'
 
 Write-Host "`nAlle Installer-Prüfungen bestanden." -ForegroundColor Green
