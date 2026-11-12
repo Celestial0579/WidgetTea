@@ -90,6 +90,9 @@ unbeantwortete Selbst-Update, die Deinstallation aus einem Ordner mit fremden Da
 Programme startet, die neben ihm liegen und wie Hilfsprogramme von Windows heißen, und dass es die laufende App an ihr
 selbst erkennt und nicht am Programmnamen, und dass ein Update nur die Dateien der vorigen Fassung entfernt. Das gebaute Setup hängt als Artefakt am Lauf. Die Installer-Prüfungen (`tests\installer\Test-Installer.ps1`)
 installieren und deinstallieren WidgetTea für den angemeldeten Benutzer – sie gehören in die CI, nicht auf den eigenen Rechner.
+Ein zweiter Job stellt das Selbst-Update nach, wie die App es auslöst (`tests\update\Test-SelfUpdate.ps1`): Die gebaute
+App fragt einen Update-Server auf dem Runner, lädt ein „neueres" Setup und installiert es; ein zweites Mal scheitert
+das Setup, und die App darf es danach nicht bei jedem Start erneut versuchen.
 Veröffentlicht wird in der CI nichts.
 
 ## Lizenz

@@ -2,6 +2,9 @@
 # (Neuinstallation, Update von 1.0.0, Abbruch ohne passende .NET-Laufzeit) und legt es als Artefakt ab,
 # damit es sich vor einem Release an einem echten Rechner ausprobieren lässt.
 #
+# Ein zweiter Job stellt das Selbst-Update nach, wie die App es auslöst: mit der gebauten App und einem
+# Update-Server auf dem Runner anstelle von GitHub.
+#
 # Veröffentlicht wird hier nichts: kein Tag, kein Release. Das bleibt build\release.ps1 -Publish von Hand,
 # denn ein Release löst bei allen Installationen das Selbst-Update aus.
 name: CI
@@ -67,6 +70,40 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: Installer-Protokolle
+          path: artifacts/test-logs/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  selbstupdate:
+    name: Selbst-Update mit der gebauten App
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      DOTNET_NOLOGO: 'true'
+      DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: NSIS bereitstellen
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\NSIS\makensis.exe") -and -not (Test-Path "$env:ProgramFiles\NSIS\makensis.exe")) {
+            choco install nsis -y --no-progress
+          }
+
+      - name: Selbst-Update-Prüfungen
+        shell: pwsh
+        run: ./tests/update/Test-SelfUpdate.ps1
+
+      - name: Protokolle der Selbst-Update-Prüfungen
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: Selbstupdate-Protokolle
           path: artifacts/test-logs/
           if-no-files-found: ignore
           retention-days: 14
