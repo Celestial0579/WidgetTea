@@ -119,12 +119,24 @@ if ($x64Patch -lt $need) {
 
     Step '2 Der winget-Aufruf des Setups holt die x64-Laufzeit'
     $winget = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\winget.exe'
-    if (-not (Test-Path -LiteralPath $winget)) { throw 'winget fehlt auf diesem Rechner' }
-    $out = Join-Path $logs 'winget-arm64.log'
-    $p = Start-Process -FilePath $winget -ArgumentList $wingetArguments -PassThru -Wait -NoNewWindow -RedirectStandardOutput $out
-    Get-Content -LiteralPath $out -ErrorAction SilentlyContinue | Where-Object { $_.Trim().Length -gt 3 } | Select-Object -Last 6 | ForEach-Object { Write-Host "       winget: $_" }
-    Write-Host "       winget endete mit $($p.ExitCode); x64 jetzt 10.0.$(Get-Patch $x64Desktop)"
-    Check ((Get-Patch $x64Desktop) -ge $need) "Die x64-Laufzeit reicht jetzt: 10.0.$(Get-Patch $x64Desktop) unter dotnet\x64"
+    if (-not (Test-Path -LiteralPath $winget)) {
+        # Auf einem CI-Runner ist winget für das Konto mitunter nicht eingerichtet, obwohl Windows es mitbringt.
+        try { Add-AppxPackage -RegisterByFamilyName -MainPackage 'Microsoft.DesktopAppInstaller_8wekyb3d8bbwe' -ErrorAction Stop }
+        catch { Note "winget ließ sich nicht einrichten: $($_.Exception.Message)" }
+    }
+    if (Test-Path -LiteralPath $winget) {
+        $out = Join-Path $logs 'winget-arm64.log'
+        $p = Start-Process -FilePath $winget -ArgumentList $wingetArguments -PassThru -Wait -NoNewWindow -RedirectStandardOutput $out
+        Get-Content -LiteralPath $out -ErrorAction SilentlyContinue | Where-Object { $_.Trim().Length -gt 3 } | Select-Object -Last 6 | ForEach-Object { Write-Host "       winget: $_" }
+        Write-Host "       winget endete mit $($p.ExitCode); x64 jetzt 10.0.$(Get-Patch $x64Desktop)"
+        Check ((Get-Patch $x64Desktop) -ge $need) "Die x64-Laufzeit reicht jetzt: 10.0.$(Get-Patch $x64Desktop) unter dotnet\x64"
+    } elseif ($x64Patch -ge $minPatch) {
+        Note 'winget fehlt auf diesem Rechner; der winget-Aufruf des Setups ist hier nicht zu prüfen'
+        Note "Weiter mit dem gebauten Setup, dem die vorhandene x64-Laufzeit 10.0.$x64Patch reicht"
+        $testSetup = $setup
+    } else {
+        throw "[$script:stage] Die x64-Laufzeit reicht nicht, und winget fehlt: Auf diesem Rechner lässt sich nicht weiterprüfen."
+    }
 } else {
     Note "Die x64-Laufzeit reicht schon (10.0.$x64Patch) und ist nicht älter als die ARM64-Laufzeit; 1 und 2 entfallen"
 }
