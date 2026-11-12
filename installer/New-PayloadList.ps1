@@ -21,7 +21,8 @@
 
 .PARAMETER Manifest
   Wahlweise: dieselbe Liste als schlichter Text, ein Pfad je Zeile, Ordner mit "\" am Ende und die tiefsten
-  zuerst. Das Setup legt sie in den Installationsordner. Ein spaeteres Setup liest sie dort und entfernt, was
+  zuerst. Die erste Zeile ist die Kennzeile aus -ManifestHeader: Nur eine Liste, die damit beginnt, befolgt das
+  Setup spaeter. Das Setup legt die Liste in den Installationsordner. Ein spaeteres Setup liest sie dort und entfernt, was
   die alte Fassung mitgebracht hat - so bleibt nichts liegen, wenn eine Datei wegfaellt.
 
 .PARAMETER Also
@@ -31,6 +32,7 @@ param(
     [Parameter(Mandatory = $true)][string]$Source,
     [Parameter(Mandatory = $true)][string]$Out,
     [string]$Manifest,
+    [string]$ManifestHeader = '',
     [string[]]$Also = @()
 )
 
@@ -74,5 +76,7 @@ if ($Manifest) {
             throw "Der Pfad '$e' passt nicht in die Dateiliste: nur ASCII, kein '..' und keines der Zeichen : * ? /"
         }
     }
+    if (-not $ManifestHeader) { throw '-Manifest braucht die Kennzeile aus -ManifestHeader.' }
+    $entries.Insert(0, $ManifestHeader)
     [System.IO.File]::WriteAllLines($Manifest, $entries, [System.Text.Encoding]::ASCII)
 }
