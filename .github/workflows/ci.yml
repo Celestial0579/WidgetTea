@@ -40,12 +40,18 @@ jobs:
       - name: Tests
         run: dotnet test tests/WidgetTea.Tests/WidgetTea.Tests.csproj -c Release
 
+      # Bis zu drei Versuche: Der Download über Chocolatey scheitert gelegentlich, vor allem wenn mehrere Jobs
+      # gleichzeitig installieren.
       - name: NSIS bereitstellen
         shell: pwsh
         run: |
-          if (-not (Test-Path "${env:ProgramFiles(x86)}\NSIS\makensis.exe") -and -not (Test-Path "$env:ProgramFiles\NSIS\makensis.exe")) {
+          $makensis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe", "$env:ProgramFiles\NSIS\makensis.exe"
+          for ($try = 1; $try -le 3 -and -not ($makensis | Where-Object { Test-Path $_ }); $try++) {
+            if ($try -gt 1) { Start-Sleep -Seconds 20 }
             choco install nsis -y --no-progress
           }
+          if (-not ($makensis | Where-Object { Test-Path $_ })) { throw 'NSIS ließ sich nicht installieren' }
+          exit 0
 
       - name: Setup bauen (ohne Veröffentlichung)
         shell: pwsh
@@ -88,12 +94,18 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
+      # Bis zu drei Versuche: Der Download über Chocolatey scheitert gelegentlich, vor allem wenn mehrere Jobs
+      # gleichzeitig installieren.
       - name: NSIS bereitstellen
         shell: pwsh
         run: |
-          if (-not (Test-Path "${env:ProgramFiles(x86)}\NSIS\makensis.exe") -and -not (Test-Path "$env:ProgramFiles\NSIS\makensis.exe")) {
+          $makensis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe", "$env:ProgramFiles\NSIS\makensis.exe"
+          for ($try = 1; $try -le 3 -and -not ($makensis | Where-Object { Test-Path $_ }); $try++) {
+            if ($try -gt 1) { Start-Sleep -Seconds 20 }
             choco install nsis -y --no-progress
           }
+          if (-not ($makensis | Where-Object { Test-Path $_ })) { throw 'NSIS ließ sich nicht installieren' }
+          exit 0
 
       - name: Selbst-Update-Prüfungen
         shell: pwsh
