@@ -159,16 +159,18 @@ Function DotnetEnsure
 
   install:
     ; winget ist auf aktuellen Windows-Versionen vorhanden; die UAC-Abfrage stellt das Laufzeit-Setup selbst.
+    ; Aufgerufen wird es über seinen festen Ort im Benutzerprofil und ohne cmd, nicht über den Suchpfad: Beim
+    ; bloßen Namen käme ein gleichnamiges Programm im Ordner des Setups oder im aktuellen Ordner zuerst zum Zug.
     ; --architecture x64: Auf einem ARM64-Windows nähme winget sonst die ARM64-Laufzeit, gesucht wird hier aber x64.
-    nsExec::ExecToStack 'cmd.exe /C where winget'
-    Pop $1
+    nsExec::ExecToStack '"$LOCALAPPDATA\Microsoft\WindowsApps\winget.exe" --version'
+    Pop $1                         ; Exitcode, oder "error", wenn es winget dort nicht gibt
     Pop $0
     ${If} $1 == 0
       ; Die Abfrage der Benutzerkontensteuerung stellt nicht das Setup, sondern das Laufzeit-Setup hinter winget.
       ; Windows zeigt sie dann oft nicht von selbst, sondern nur als blinkendes Schild in der Taskleiste – das
       ; muss hier stehen. Das Fenster ist klein: oben zwei Zeilen zu etwa 35 Zeichen, unten eine kurze.
       Banner::show /NOUNLOAD /set 76 "Windows-Abfrage bitte bestätigen –$\r$\ndas Schild in der Taskleiste blinkt." "Installation läuft …"
-      nsExec::ExecToStack 'cmd.exe /C winget install --id ${DOTNET_WINGET} --exact --source winget --architecture x64 --silent --accept-package-agreements --accept-source-agreements --disable-interactivity'
+      nsExec::ExecToStack '"$LOCALAPPDATA\Microsoft\WindowsApps\winget.exe" install --id ${DOTNET_WINGET} --exact --source winget --architecture x64 --silent --accept-package-agreements --accept-source-agreements --disable-interactivity'
       Pop $1
       Pop $0
       Banner::destroy

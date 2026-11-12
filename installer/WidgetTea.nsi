@@ -142,8 +142,11 @@ Var Restart
 !macro CLOSE_APP_FUNC un WOFUER
 Function ${un}CloseRunningApp
   StrCpy $R8 0
+  ; Hilfsprogramme von Windows immer mit vollem Pfad aus dem Systemordner. Beim bloßen Namen sucht Windows zuerst
+  ; im Ordner des Setups und im aktuellen Ordner, und dort kann ein fremdes Programm gleichen Namens liegen.
+  ; Zur Schreibweise: cmd /C entfernt das erste und das letzte Anführungszeichen des Befehls, der Rest bleibt.
   retry:
-    nsExec::ExecToStack 'cmd.exe /C tasklist /FI "IMAGENAME eq ${EXENAME}" /NH | find /I "${EXENAME}"'
+    nsExec::ExecToStack '"$SYSDIR\cmd.exe" /C ""$SYSDIR\tasklist.exe" /FI "IMAGENAME eq ${EXENAME}" /NH | "$SYSDIR\find.exe" /I "${EXENAME}""'
     Pop $0
     Pop $1
     ${If} $0 == 0
@@ -158,9 +161,9 @@ Function ${un}CloseRunningApp
         /SD IDOK IDOK kill
       Abort
       kill:
-        nsExec::ExecToStack 'taskkill /IM "${EXENAME}"'
+        nsExec::ExecToStack '"$SYSDIR\taskkill.exe" /IM "${EXENAME}"'
         Sleep 1500
-        nsExec::ExecToStack 'taskkill /F /IM "${EXENAME}"'
+        nsExec::ExecToStack '"$SYSDIR\taskkill.exe" /F /IM "${EXENAME}"'
         Sleep 500
         Goto retry
     ${EndIf}
@@ -281,6 +284,10 @@ Function RemoveBundledRuntime
 FunctionEnd
 
 Function .onInit
+  ; Arbeitsordner auf den Systemordner stellen. Nach einem Doppelklick ist es der Ordner der Setup-Datei, und
+  ; alles, was das Setup startet, erbte ihn samt dem, was dort sonst noch liegt.
+  SetOutPath "$SYSDIR"
+
   ${IfNot} ${AtLeastWin10}
     MessageBox MB_OK|MB_ICONSTOP "WidgetTea benötigt Windows 10 oder neuer." /SD IDOK
     Abort

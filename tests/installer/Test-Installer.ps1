@@ -613,4 +613,36 @@ $bare = @($calls | Where-Object { $_.Matches[0].Groups[2].Value -notmatch '^"\$(
 foreach ($b in $bare) { Write-Host "       $($b.Filename):$($b.LineNumber): $($b.Line.Trim())" }
 Check ($bare.Count -eq 0) 'Jeder davon nennt das Programm mit vollem Pfad'
 
+# winget ruft das Setup über seinen festen Ort im Benutzerprofil auf. Ob nsExec es von dort starten kann, zeigt ein
+# Probe-Setup mit genau diesem Aufruf. Gibt es winget auf diesem Rechner nicht, muss nsExec das als "error" melden
+# und trotzdem zwei Werte auf den Stapel legen, denn das Setup holt zwei herunter.
+$probeNsi = Join-Path $work 'winget-probe.nsi'
+$probeExe = Join-Path $work 'winget-probe.exe'
+$probeOut = Join-Path $work 'winget-probe.txt'
+Set-Content -LiteralPath $probeNsi -Encoding ascii -Value @'
+Unicode true
+RequestExecutionLevel user
+SilentInstall silent
+OutFile "${OUTFILE}"
+Section
+  Push "unten"
+  nsExec::ExecToStack '"$LOCALAPPDATA\Microsoft\WindowsApps\winget.exe" --version'
+  Pop $1
+  Pop $0
+  Pop $3
+  FileOpen $2 "${RESULT}" w
+  FileWrite $2 "$1|$0|$3"
+  FileClose $2
+SectionEnd
+'@
+& $makensis /V2 "/DOUTFILE=$probeExe" "/DRESULT=$probeOut" $probeNsi | Out-Null
+if ($LASTEXITCODE) { throw 'makensis (winget-Probe) fehlgeschlagen' }
+Start-Process -FilePath $probeExe -Wait
+$probe = ((Get-Content -LiteralPath $probeOut -Raw) -replace '\s+', ' ').Trim()
+if (Test-Path -LiteralPath (Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\winget.exe')) {
+    Check ($probe -match '^0\|v?\d+\.\d+.*\|unten$') "winget ist vorhanden und antwortet über den festen Pfad: $probe"
+} else {
+    Check ($probe -match '^error\|\|unten$') "winget fehlt auf diesem Rechner, und nsExec meldet das als error: $probe"
+}
+
 Write-Host "`nAlle Installer-Prüfungen bestanden." -ForegroundColor Green
