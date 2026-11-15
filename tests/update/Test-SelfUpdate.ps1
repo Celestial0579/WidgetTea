@@ -141,12 +141,13 @@ Set-Content -LiteralPath (Join-Path $work 'kaputt.cs') -Encoding ascii -Value 'p
 Invoke-Checked 'csc (kaputtes Setup)' { & $csc /nologo "/out:$setupBroken" (Join-Path $work 'kaputt.cs') }
 
 # Der Server: antwortet wie ein Gitea auf die Frage nach dem neuesten Release, liefert Setup und Prüfsumme und
-# schreibt jede Anfrage auf.
+# schreibt jede Anfrage auf. Die Dateien liegen wie bei Gitea unter <Repo>/releases/download/<Tag>/: Von anderswo
+# lädt die App nichts (Issue 35).
 Set-Content -LiteralPath (Join-Path $serve 'release.json') -Encoding ascii -Value @"
 {"tag_name": "v$newVersion", "html_url": "$repository/releases/tag/v$newVersion", "draft": false, "prerelease": false,
  "assets": [
-   {"name": "WidgetTea-$newVersion-setup.exe", "browser_download_url": "$base/dl/setup.exe"},
-   {"name": "WidgetTea-$newVersion-setup.exe.sha256", "browser_download_url": "$base/dl/setup.exe.sha256"} ]}
+   {"name": "WidgetTea-$newVersion-setup.exe", "browser_download_url": "$repository/releases/download/v$newVersion/WidgetTea-$newVersion-setup.exe"},
+   {"name": "WidgetTea-$newVersion-setup.exe.sha256", "browser_download_url": "$repository/releases/download/v$newVersion/WidgetTea-$newVersion-setup.exe.sha256"} ]}
 "@
 Set-Content -LiteralPath (Join-Path $serve 'heatmap.json') -Encoding ascii -Value '[{"timestamp": 1762948800, "contributions": 3}]'
 $serverScript = Join-Path $work 'server.ps1'
@@ -161,8 +162,8 @@ while ($listener.IsListening) {
     Add-Content -LiteralPath (Join-Path $Root 'anfragen.log') -Value $path
     $file = $null
     if ($path -match '/releases/latest$') { $file = 'release.json' }
-    elseif ($path -eq '/dl/setup.exe') { $file = 'setup.exe' }
-    elseif ($path -eq '/dl/setup.exe.sha256') { $file = 'setup.exe.sha256' }
+    elseif ($path -match '/releases/download/[^/]+/[^/]+-setup\.exe$') { $file = 'setup.exe' }
+    elseif ($path -match '/releases/download/[^/]+/[^/]+-setup\.exe\.sha256$') { $file = 'setup.exe.sha256' }
     elseif ($path -match '/heatmap$') { $file = 'heatmap.json' }
     try {
         if ($file -and (Test-Path -LiteralPath (Join-Path $Root $file))) {
@@ -213,8 +214,8 @@ try {
     $updated = Wait-Until { (Test-Path $targetExe) -and (Get-Item $targetExe).VersionInfo.ProductVersion -like "$newVersion*" -and @(Get-App).Count -gt 0 } 180
     Check $updated "Danach ist $newVersion installiert und läuft, vom Setup gestartet"
     Check (@(Get-Requests '/releases/latest$').Count -ge 1) 'Die App hat ihre Update-Quelle gefragt'
-    Check (@(Get-Requests '^/dl/setup\.exe$').Count -eq 1) 'Sie hat das Setup genau einmal geladen'
-    Check (@(Get-Requests '^/dl/setup\.exe\.sha256$').Count -eq 1) 'und dessen Prüfsumme'
+    Check (@(Get-Requests '/releases/download/[^/]+/[^/]+-setup\.exe$').Count -eq 1) 'Sie hat das Setup genau einmal geladen'
+    Check (@(Get-Requests '/releases/download/[^/]+/[^/]+-setup\.exe\.sha256$').Count -eq 1) 'und dessen Prüfsumme'
     Check (@(Get-Requests '/heatmap$').Count -ge 1) 'Nebenbei: Die Heatmap wurde abgefragt'
     $cleared = Wait-Until { -not (Test-Path -LiteralPath $attemptFile) } 20
     Check $cleared 'Der Vermerk über den begonnenen Versuch ist wieder weg'
@@ -229,7 +230,7 @@ try {
     Set-Offer $setupBroken
     Start-App
     Write-Host '       Die App sucht eine Minute nach dem Start nach Updates ...'
-    $closed = Wait-Until { @(Get-Requests '^/dl/setup\.exe$').Count -ge 1 -and @(Get-App).Count -eq 0 } 180
+    $closed = Wait-Until { @(Get-Requests '/releases/download/[^/]+/[^/]+-setup\.exe$').Count -ge 1 -and @(Get-App).Count -eq 0 } 180
     Check $closed 'Die App hat das Setup geladen, gestartet und sich dafür beendet'
     Start-Sleep -Seconds 3
     Check (@(Get-App).Count -eq 0) 'Das gescheiterte Setup hat sie nicht wieder gestartet: Das Widget ist zu'
@@ -244,7 +245,7 @@ try {
     $asked = Wait-Until { @(Get-Requests '/releases/latest$').Count -gt $checksBefore } 180
     Check $asked 'Die App hat wieder nach Updates gefragt'
     Start-Sleep -Seconds 15
-    Check (@(Get-Requests '^/dl/setup\.exe$').Count -eq 1) 'Sie hat dasselbe Update nicht noch einmal geladen'
+    Check (@(Get-Requests '/releases/download/[^/]+/[^/]+-setup\.exe$').Count -eq 1) 'Sie hat dasselbe Update nicht noch einmal geladen'
     Check (@(Get-App).Count -gt 0) 'Sie läuft weiter'
     Check ((Get-Item $targetExe).VersionInfo.ProductVersion -like "$version*") "Installiert ist weiter $version"
     Stop-App
