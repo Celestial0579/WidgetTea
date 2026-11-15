@@ -995,17 +995,26 @@ if (Test-Path -LiteralPath (Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\w
 # e) Selbst-Update auf einem Rechner ohne winget, „Wiederholen/Abbrechen“ bleibt unbeantwortet (Issue 30): Nach dem
 #    Zeitablauf startet die alte Version wieder, und der Hinweis dazu muss vor anderen Fenstern liegen. In der
 #    Test-VM lag er hinter dem Browser.
+#    Wie dort öffnet das Setup ein anderes Programm, das den Vordergrund übernimmt: statt des Browsers den Editor
+#    mit einer Textdatei (DOTNET_URL zeigt auf sie, ExecShell öffnet sie wie die Adresse).
+$browserStandIn = Join-Path $work 'statt-browser.txt'
+Set-Content -LiteralPath $browserStandIn -Value 'Steht für den Browser mit dem Download der Laufzeit.'
+$setupOpensEditor = Join-Path $work 'WidgetTea-ohne-winget-mit-editor-setup.exe'
+& $makensis @($common | Where-Object { $_ -ne '/DDOTNET_URL=' }) "/DDOTNET_URL=$browserStandIn" "/DOUTFILE=$setupOpensEditor" `
+    '/DDOTNET_WINGET_EXE=C:\gibt-es-nicht\winget.exe' (Join-Path $root 'installer\WidgetTea.nsi')
+if ($LASTEXITCODE) { throw 'makensis (Testfassung ohne winget, öffnet den Editor) fehlgeschlagen' }
 $target = Join-Path $work 'ohne-winget'
 $r = Invoke-Setup $setup @('/S', "/D=$target")
 Check ($r.ExitCode -eq 0) "Exitcode 0 (war $($r.ExitCode))"
 Write-Settings $settingsOriginal
 $hint = 'Auf die Nachfrage kam keine Antwort'
-$r = Invoke-Setup $setupNoWinget @('/S', '/RESTART', "/D=$target") ([ordered]@{
+$r = Invoke-Setup $setupOpensEditor @('/S', '/RESTART', "/D=$target") ([ordered]@{
     $ask   = @('Yes', 'Ja')
     $retry = @()
     $hint  = { Test-RetryFront -Cover -Answer @('OK') }
 }) -TimeoutSec 180
 Stop-App
+Get-Process -Name 'notepad' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 Check ($r.ExitCode -eq 3) "Exitcode 3 (war $($r.ExitCode))"
 Check ($r.Seen -contains $hint) 'Nach dem Zeitablauf von „Wiederholen/Abbrechen" kam der Hinweis'
 Check-RetryFront -Cover -What 'Der Hinweis nach dem Zeitablauf'
