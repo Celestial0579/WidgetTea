@@ -97,10 +97,10 @@ Function DotnetAbort
   Quit
 FunctionEnd
 
-; Meldungsfenster mit Zeitablauf.
+; Meldungsfenster mit Zeitablauf (0 Sekunden: ohne Zeitablauf).
 ;   Push <Text>  Push <MB_-Flags als Zahl>  Push <Sekunden>  Call DotnetTimedBox  Pop <Antwort>
-; Antwort: 6 Ja, 7 Nein, 4 Wiederholen, 2 Abbrechen, 32000 Zeitablauf – oder "error", wenn Windows die Funktion
-; nicht kennt. NSIS selbst kann kein Fenster mit Zeitablauf. MessageBoxTimeoutW ist von Microsoft nicht
+; Antwort: 6 Ja, 7 Nein, 4 Wiederholen, 2 Abbrechen, 32000 Zeitablauf, 0 Fehler – oder "error", wenn Windows die
+; Funktion nicht kennt. NSIS selbst kann kein Fenster mit Zeitablauf. MessageBoxTimeoutW ist von Microsoft nicht
 ; dokumentiert, steckt aber seit Windows XP hinter MessageBox selbst; für den Fall der Fälle fragen die Aufrufer
 ; bei "error" ohne Zeitablauf, wie vorher.
 Function DotnetTimedBox
@@ -111,9 +111,13 @@ Function DotnetTimedBox
   Exch 2
   Exch $0         ; $0 = Text            Stack jetzt: altes $0, altes $2, altes $1
   Push $3
-  IntOp $2 $2 * 1000
   StrCpy $3 "${DOTNET_CAPTION}"
-  System::Call 'user32::MessageBoxTimeoutW(p 0, w r0, w r3, i r1, i 0, i r2) i .r0'
+  ${If} $2 == 0
+    System::Call 'user32::MessageBoxW(p 0, w r0, w r3, i r1) i .r0'
+  ${Else}
+    IntOp $2 $2 * 1000
+    System::Call 'user32::MessageBoxTimeoutW(p 0, w r0, w r3, i r1, i 0, i r2) i .r0'
+  ${EndIf}
   Pop $3
   Exch $0         ; Antwort auf den Stack, $0 wiederhergestellt
   Exch
@@ -192,10 +196,15 @@ Function DotnetEnsure
       ExecShell "open" "${DOTNET_URL}"
     !endif
     StrCpy $1 "Das Setup der ${DOTNET_NAME} wird von Microsoft heruntergeladen.$\r$\nBitte ausführen und danach auf „Wiederholen“ klicken."
+    ; Dieses Fenster muss vor dem Browser liegen, der sich gleich mit dem Download öffnet, sonst findet der Nutzer
+    ; nach der Installation der Laufzeit nicht zurück (Issue 11). MB_TOPMOST allein genügt nicht: Nach dem Hinweis
+    ; während winget (Banner, eigener Thread) kommt das Fenster ohne „immer im Vordergrund“, auf GitHubs
+    ; Windows-Runner nachgestellt. Mit MB_SYSTEMMODAL ist es dort auch dann „immer im Vordergrund“. Das Fenster ohne Zeitablauf
+    ; kommt deshalb wie das im stillen Modus über DotnetTimedBox, mit denselben Merkmalen.
     ${If} ${Silent}
       ; Auch hier nicht ewig warten – aber lange genug, um die Laufzeit in Ruhe zu laden und zu installieren.
       Push "$1$\r$\n$\r$\nOhne Antwort wird die Installation von ${PRODUCT} nach ${DOTNET_RETRY_MINUTES} Minuten abgebrochen."
-      Push 0x00050045              ; MB_RETRYCANCEL | MB_ICONINFORMATION | MB_SETFOREGROUND | MB_TOPMOST
+      Push 0x00051045              ; MB_RETRYCANCEL | MB_ICONINFORMATION | MB_SYSTEMMODAL | MB_SETFOREGROUND | MB_TOPMOST
       Push ${DOTNET_RETRY_TIMEOUT}
       Call DotnetTimedBox
       Pop $0
@@ -207,7 +216,16 @@ Function DotnetEnsure
         MessageBox MB_RETRYCANCEL|MB_ICONINFORMATION|MB_TOPMOST "$1" IDRETRY check
       ${EndIf}
     ${Else}
-      MessageBox MB_RETRYCANCEL|MB_ICONINFORMATION|MB_TOPMOST "$1" IDRETRY check
+      Push "$1"
+      Push 0x00051045              ; wie oben
+      Push 0                       ; ohne Zeitablauf
+      Call DotnetTimedBox
+      Pop $0
+      ${If} $0 == 4                ; Wiederholen
+        Goto check
+      ${ElseIf} $0 == 0            ; Fenster ließ sich nicht zeigen: wie bisher
+        MessageBox MB_RETRYCANCEL|MB_ICONINFORMATION|MB_TOPMOST "$1" IDRETRY check
+      ${EndIf}
     ${EndIf}
     Call DotnetAbort
 FunctionEnd
