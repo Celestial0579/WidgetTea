@@ -24,8 +24,10 @@ Auf einem ARM64-Windows läuft WidgetTea in der x64-Emulation und braucht auch d
 Ist die Umgebungsvariable `DOTNET_ROOT` gesetzt und zeigt sie auf die ARM64-Laufzeit, startet WidgetTea nicht.
 Abhilfe: `DOTNET_ROOT_X64` auf `C:\Program Files\dotnet\x64` setzen.
 
-Das Setup ist vorerst nicht signiert. Windows meldet beim Start deshalb „Der Computer wurde durch Windows geschützt“;
-über „Weitere Informationen“ und „Trotzdem ausführen“ geht es weiter. Ob die Datei vollständig und unverändert
+Das Setup ist vorerst nicht signiert. Edge hält den Download deshalb zunächst zurück („… wird häufig nicht
+heruntergeladen“); behalten lässt er sich über das Menü des Eintrags, „Beibehalten“ und „Trotzdem beibehalten“. Startet
+man die Datei auf anderem Weg, meldet Windows „Der Computer wurde durch Windows geschützt“; über „Weitere
+Informationen“ und „Trotzdem ausführen“ geht es weiter. Ob die Datei vollständig und unverändert
 angekommen ist, zeigt der Vergleich mit der Prüfsumme in `…-setup.exe.sha256` aus demselben Release (Groß- und
 Kleinschreibung spielt keine Rolle):
 
