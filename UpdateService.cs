@@ -86,15 +86,18 @@ public sealed class UpdateService
     }
 
     /// <summary>
-    /// Nur Dateien aus den Releases des Update-Repos selbst, über https:
+    /// Nur Dateien aus den Releases des Update-Repos selbst, mit dessen Schema:
     /// https://github.com/owner/repo/releases/download/… bzw. https://gitea/[unterpfad/]owner/repo/releases/download/…
-    /// Den Weiterleitungen von dort (bei GitHub auf den Speicher-Host) folgt der Client danach selbst.
+    /// Ein Repo über https (wie das ausgelieferte auf GitHub) lässt also nur https zu. Ein Gitea, das selbst nur über
+    /// http erreichbar ist, liefert schon die Release-Liste ungeschützt; https allein für die Downloads schützte dort
+    /// nichts. Den Weiterleitungen von dort (bei GitHub auf den Speicher-Host) folgt der Client danach selbst.
     /// </summary>
     internal static bool IsReleaseDownload(string? url, string repositoryUrl)
     {
         if (url == null ||
-            !Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps ||
+            !Uri.TryCreate(url, UriKind.Absolute, out var uri) ||
             !Uri.TryCreate(repositoryUrl.TrimEnd('/'), UriKind.Absolute, out var repo) ||
+            repo.Scheme is not ("https" or "http") || uri.Scheme != repo.Scheme ||
             !uri.Host.Equals(repo.Host, StringComparison.OrdinalIgnoreCase) || uri.Port != repo.Port ||
             !string.IsNullOrEmpty(uri.UserInfo))
             return false;

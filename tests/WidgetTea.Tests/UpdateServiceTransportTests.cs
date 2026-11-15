@@ -200,10 +200,18 @@ public sealed class UpdateServiceTransportTests : IDisposable
         Assert.False(UpdateService.IsReleaseDownload(url, Repository));
     }
 
+    [Fact]
+    public void Bei_einem_Repo_ueber_http_gilt_https_nicht_als_dasselbe()
+    {
+        Assert.False(UpdateService.IsReleaseDownload("https://gitea.example.com/owner/repo/releases/download/v1/x.exe", "http://gitea.example.com/owner/repo"));
+        Assert.False(UpdateService.IsReleaseDownload("ftp://gitea.example.com/owner/repo/releases/download/v1/x.exe", "ftp://gitea.example.com/owner/repo"));
+    }
+
     [Theory]
     [InlineData("https://github.com/Celestial0579/WidgetTea", "https://github.com/Celestial0579/WidgetTea/releases/download/v1.2.0/WidgetTea-1.2.0-setup.exe")]
     [InlineData("https://github.com/celestial0579/widgettea/", "https://GitHub.com/Celestial0579/WidgetTea/releases/download/v1.2.0/x.exe")]
     [InlineData("https://gitea.example.com/sub/owner/repo", "https://gitea.example.com/sub/owner/repo/releases/download/v1/x.exe")]
+    [InlineData("http://127.0.0.1:8080/owner/repo", "http://127.0.0.1:8080/owner/repo/releases/download/v1/x.exe")]   // Gitea nur über http
     public void Dateien_aus_den_Releases_des_Update_Repos_gelten(string repository, string url)
     {
         Assert.True(UpdateService.IsReleaseDownload(url, repository));
