@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Security.Cryptography;
@@ -68,8 +69,8 @@ public sealed class UpdateServiceTransportTests : IDisposable
     // ---- Abfrage
 
     private static string Release(string tag, bool draft = false, bool prerelease = false, string assets = """
-        {"name": "WidgetTea-1.2.0-setup.exe", "browser_download_url": "https://example.invalid/dl/setup.exe"},
-        {"name": "WidgetTea-1.2.0-setup.exe.sha256", "browser_download_url": "https://example.invalid/dl/setup.exe.sha256"}
+        {"name": "WidgetTea-1.2.0-setup.exe", "browser_download_url": "https://github.com/Celestial0579/WidgetTea/releases/download/v1.2.0/WidgetTea-1.2.0-setup.exe"},
+        {"name": "WidgetTea-1.2.0-setup.exe.sha256", "browser_download_url": "https://github.com/Celestial0579/WidgetTea/releases/download/v1.2.0/WidgetTea-1.2.0-setup.exe.sha256"}
         """) => $$"""
         {"tag_name": "{{tag}}", "html_url": "https://example.invalid/release", "draft": {{(draft ? "true" : "false")}},
          "prerelease": {{(prerelease ? "true" : "false")}}, "assets": [ {{assets}} ]}
@@ -85,8 +86,8 @@ public sealed class UpdateServiceTransportTests : IDisposable
         Assert.NotNull(info);
         Assert.Equal(new Version(1, 2, 0), info.Version);
         Assert.Equal("WidgetTea-1.2.0-setup.exe", info.SetupName);
-        Assert.Equal("https://example.invalid/dl/setup.exe", info.SetupUrl);
-        Assert.Equal("https://example.invalid/dl/setup.exe.sha256", info.ChecksumUrl);
+        Assert.Equal("https://github.com/Celestial0579/WidgetTea/releases/download/v1.2.0/WidgetTea-1.2.0-setup.exe", info.SetupUrl);
+        Assert.Equal("https://github.com/Celestial0579/WidgetTea/releases/download/v1.2.0/WidgetTea-1.2.0-setup.exe.sha256", info.ChecksumUrl);
         Assert.Equal(["https://api.github.com/repos/Celestial0579/WidgetTea/releases/latest"], handler.Requested);
     }
 
@@ -115,7 +116,7 @@ public sealed class UpdateServiceTransportTests : IDisposable
     [Fact]
     public async Task Fehlt_die_Pruefsumme_im_Release_wird_nichts_geladen()
     {
-        var onlySetup = """{"name": "WidgetTea-1.2.0-setup.exe", "browser_download_url": "https://example.invalid/dl/setup.exe"}""";
+        var onlySetup = """{"name": "WidgetTea-1.2.0-setup.exe", "browser_download_url": "https://github.com/Celestial0579/WidgetTea/releases/download/v1.2.0/WidgetTea-1.2.0-setup.exe"}""";
         var handler = new StubHandler(_ => Json(Release("v1.2.0", assets: onlySetup)));
         var service = new UpdateService(null, handler) { DownloadRoot = _root };
 
@@ -179,6 +180,150 @@ public sealed class UpdateServiceTransportTests : IDisposable
 
         Assert.Equal("boese-setup.exe", Path.GetFileName(path));
         Assert.Equal(Path.GetFullPath(_root), Path.GetFullPath(Path.GetDirectoryName(Path.GetDirectoryName(path)!)!));
+    }
+
+    // ---- Herkunft der Dateien, unvollständige Antworten (Issue 35)
+
+    [Theory]
+    [InlineData("http://github.com/Celestial0579/WidgetTea/releases/download/v1.2.0/x")]          // kein https
+    [InlineData("https://example.invalid/Celestial0579/WidgetTea/releases/download/v1.2.0/x")]    // anderer Host
+    [InlineData("https://github.com/jemand/anderes/releases/download/v1.2.0/x")]                   // anderes Repo
+    [InlineData("https://github.com/Celestial0579/WidgetTea/archive/x")]                           // kein Release
+    [InlineData("https://github.com/Celestial0579/WidgetTea/releases/download/")]                  // nur das Präfix
+    [InlineData("https://github.com/Celestial0579/WidgetTea/releases/download/../../../jemand/x")] // hinaus
+    [InlineData("https://user@github.com/Celestial0579/WidgetTea/releases/download/v1.2.0/x")]     // Anmeldeteil
+    [InlineData("https://github.com:8443/Celestial0579/WidgetTea/releases/download/v1.2.0/x")]     // anderer Port
+    [InlineData("kein-uri")]
+    [InlineData(null)]
+    public void Fremde_Download_Adressen_gelten_nicht(string? url)
+    {
+        Assert.False(UpdateService.IsReleaseDownload(url, Repository));
+    }
+
+    [Fact]
+    public void Bei_einem_Repo_ueber_http_gilt_https_nicht_als_dasselbe()
+    {
+        Assert.False(UpdateService.IsReleaseDownload("https://gitea.example.com/owner/repo/releases/download/v1/x.exe", "http://gitea.example.com/owner/repo"));
+        Assert.False(UpdateService.IsReleaseDownload("ftp://gitea.example.com/owner/repo/releases/download/v1/x.exe", "ftp://gitea.example.com/owner/repo"));
+    }
+
+    [Theory]
+    [InlineData("https://github.com/Celestial0579/WidgetTea", "https://github.com/Celestial0579/WidgetTea/releases/download/v1.2.0/WidgetTea-1.2.0-setup.exe")]
+    [InlineData("https://github.com/celestial0579/widgettea/", "https://GitHub.com/Celestial0579/WidgetTea/releases/download/v1.2.0/x.exe")]
+    [InlineData("https://gitea.example.com/sub/owner/repo", "https://gitea.example.com/sub/owner/repo/releases/download/v1/x.exe")]
+    [InlineData("http://127.0.0.1:8080/owner/repo", "http://127.0.0.1:8080/owner/repo/releases/download/v1/x.exe")]   // Gitea nur über http
+    public void Dateien_aus_den_Releases_des_Update_Repos_gelten(string repository, string url)
+    {
+        Assert.True(UpdateService.IsReleaseDownload(url, repository));
+    }
+
+    [Fact]
+    public async Task Ein_Release_mit_Dateien_von_anderswo_bietet_nichts_zum_Laden_an()
+    {
+        var foreign = """
+            {"name": "WidgetTea-1.2.0-setup.exe", "browser_download_url": "https://example.invalid/dl/setup.exe"},
+            {"name": "WidgetTea-1.2.0-setup.exe.sha256", "browser_download_url": "http://github.com/Celestial0579/WidgetTea/releases/download/v1.2.0/WidgetTea-1.2.0-setup.exe.sha256"}
+            """;
+        var handler = new StubHandler(_ => Json(Release("v1.2.0", assets: foreign)));
+        var service = new UpdateService(null, handler) { DownloadRoot = _root };
+
+        var info = await service.CheckAsync(Repository, Running, Ct);
+
+        Assert.NotNull(info);
+        Assert.Null(info.SetupUrl);
+        Assert.Null(info.ChecksumUrl);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.DownloadAsync(info, Ct));
+        Assert.Single(handler.Requested);            // nur die Abfrage, kein Download
+    }
+
+    [Theory]
+    [InlineData("""{"tag_name": "v1.2.0", "assets": null}""")]
+    [InlineData("""{"tag_name": "v1.2.0"}""")]
+    [InlineData("""{"tag_name": "v1.2.0", "html_url": null, "assets": [null, {"name": null, "browser_download_url": null}, {}]}""")]
+    [InlineData("""{"tag_name": null, "assets": []}""")]
+    public async Task Eine_unvollstaendige_Antwort_ist_kein_Fehler(string body)
+    {
+        var handler = new StubHandler(_ => Json(body));
+
+        var info = await new UpdateService(null, handler).CheckAsync(Repository, Running, Ct);
+
+        Assert.True(info == null || info.SetupUrl == null);
+    }
+
+    [Fact]
+    public async Task Das_Token_geht_nur_an_den_Host_des_Update_Repos()
+    {
+        const string gitea = "https://gitea.example.com/owner/repo";
+        var seen = new List<(string Url, string? Auth)>();
+        var handler = new StubHandler(request =>
+        {
+            seen.Add((request.RequestUri!.AbsoluteUri, request.Headers.Authorization?.ToString()));
+            return request.RequestUri!.AbsoluteUri.EndsWith(".sha256", StringComparison.Ordinal)
+                ? new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(Sha256(Setup)) }
+                : new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(Setup) };
+        });
+        var service = new UpdateService("geheim", handler, gitea) { DownloadRoot = _root };
+
+        await service.DownloadAsync(new UpdateInfo(new Version(9, 9, 9), gitea, "https://gitea.example.com/owner/repo/releases/download/v9/s.exe",
+            "s.exe", "https://anderer.example.com/s.exe.sha256"), Ct);
+
+        Assert.Equal(2, seen.Count);
+        Assert.Equal("token geheim", seen.Single(r => r.Url.StartsWith("https://gitea.example.com/", StringComparison.Ordinal)).Auth);
+        Assert.Null(seen.Single(r => r.Url.StartsWith("https://anderer.example.com/", StringComparison.Ordinal)).Auth);
+    }
+
+    // ---- Größengrenzen (Issue 35)
+
+    /// <summary>Liefert beliebig viele Nullbytes, ohne die Länge anzukündigen.</summary>
+    private sealed class EndlessStream(long length) : Stream
+    {
+        private long _left = length;
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            var n = (int)Math.Min(count, _left);
+            Array.Clear(buffer, offset, n);
+            _left -= n;
+            return n;
+        }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    [Fact]
+    public async Task Eine_zu_grosse_Pruefsummen_Datei_wird_verworfen()
+    {
+        var service = Downloading(new string('a', 4096), out var handler);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.DownloadAsync(Offer(), Ct));
+
+        Assert.Single(handler.Requested);            // das Setup wird gar nicht erst geladen
+    }
+
+    [Theory]
+    [InlineData(true)]    // Länge angekündigt
+    [InlineData(false)]   // Länge nicht angekündigt, der Strom hört nicht auf
+    public async Task Ein_zu_grosses_Setup_wird_verworfen_und_nichts_bleibt_liegen(bool announced)
+    {
+        var handler = new StubHandler(request =>
+        {
+            if (request.RequestUri!.AbsoluteUri.EndsWith(".sha256", StringComparison.Ordinal))
+                return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(Sha256(Setup)) };
+            var content = new StreamContent(new EndlessStream(UpdateService.MaxSetupBytes + 1));
+            content.Headers.ContentLength = announced ? UpdateService.MaxSetupBytes + 1 : null;
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = content };
+        });
+        var service = new UpdateService(null, handler) { DownloadRoot = _root };
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.DownloadAsync(Offer(), Ct));
+
+        Assert.Empty(Directory.GetFileSystemEntries(_root));
     }
 
     // ---- Aufräumen beim Start

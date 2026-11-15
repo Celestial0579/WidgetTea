@@ -40,20 +40,70 @@ public sealed class UpdateService
     /// <summary>Ordner, unter dem die geladenen Setups liegen; in Tests ein anderer als im Betrieb.</summary>
     internal string DownloadRoot { get; init; } = TempDir;
 
-    private readonly HttpClient _http;
+    /// <summary>Obergrenze für das Setup. Heute rund 0,2 MB; mehr als das Vielfache davon ist kein Setup von uns.</summary>
+    internal const long MaxSetupBytes = 50L * 1024 * 1024;
 
-    public UpdateService(string? token) : this(token, new HttpClientHandler())
+    /// <summary>Obergrenze für die Prüfsummen-Datei (eine Zeile: 64 Hex-Zeichen und der Dateiname).</summary>
+    internal const long MaxChecksumBytes = 1024;
+
+    private readonly HttpClient _http;
+    private readonly string? _token;
+    private readonly string? _tokenRepository;
+
+    public UpdateService(string? token) : this(token, new HttpClientHandler(), RepositoryUrl)
     {
     }
 
     /// <summary>Dasselbe über einen vorgegebenen Transport, damit sich Abfrage und Download prüfen lassen.</summary>
-    internal UpdateService(string? token, HttpMessageHandler handler)
+    /// <param name="tokenRepository">Update-Repo, an dessen Host allein das Token geht (Vorgabe: das des Builds).</param>
+    internal UpdateService(string? token, HttpMessageHandler handler, string? tokenRepository = null)
     {
         _http = new HttpClient(handler) { Timeout = TimeSpan.FromMinutes(5) };
         _http.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("WidgetTea", CurrentVersion.ToString(3)));
         _http.DefaultRequestHeaders.Accept.ParseAdd("application/json");
-        if (!string.IsNullOrEmpty(token))
-            _http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("token", token);
+        // Das Token geht nicht als Standard-Header mit, sondern nur in Anfragen an den Host des Update-Repos
+        // (siehe Send): Eine Download-Adresse auf einem anderen Host bekommt es nie.
+        _token = string.IsNullOrEmpty(token) ? null : token;
+        _tokenRepository = tokenRepository;
+    }
+
+    private Task<HttpResponseMessage> Send(string url, HttpCompletionOption completion, CancellationToken ct)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Get, url);
+        if (_token != null && _tokenRepository != null && IsRepositoryHost(request.RequestUri!, _tokenRepository))
+            request.Headers.Authorization = new AuthenticationHeaderValue("token", _token);
+        return _http.SendAsync(request, completion, ct);
+    }
+
+    /// <summary>Gehört die Adresse zum Host des Update-Repos (bei GitHub auch zu dessen API-Host)?</summary>
+    internal static bool IsRepositoryHost(Uri uri, string repositoryUrl)
+    {
+        if (!Uri.TryCreate(repositoryUrl, UriKind.Absolute, out var repo))
+            return false;
+        var api = new Uri(LatestReleaseApi(repositoryUrl));
+        return uri.Host.Equals(repo.Host, StringComparison.OrdinalIgnoreCase) && uri.Port == repo.Port
+            || uri.Host.Equals(api.Host, StringComparison.OrdinalIgnoreCase) && uri.Port == api.Port;
+    }
+
+    /// <summary>
+    /// Nur Dateien aus den Releases des Update-Repos selbst, mit dessen Schema:
+    /// https://github.com/owner/repo/releases/download/… bzw. https://gitea/[unterpfad/]owner/repo/releases/download/…
+    /// Ein Repo über https (wie das ausgelieferte auf GitHub) lässt also nur https zu. Ein Gitea, das selbst nur über
+    /// http erreichbar ist, liefert schon die Release-Liste ungeschützt; https allein für die Downloads schützte dort
+    /// nichts. Den Weiterleitungen von dort (bei GitHub auf den Speicher-Host) folgt der Client danach selbst.
+    /// </summary>
+    internal static bool IsReleaseDownload(string? url, string repositoryUrl)
+    {
+        if (url == null ||
+            !Uri.TryCreate(url, UriKind.Absolute, out var uri) ||
+            !Uri.TryCreate(repositoryUrl.TrimEnd('/'), UriKind.Absolute, out var repo) ||
+            repo.Scheme is not ("https" or "http") || uri.Scheme != repo.Scheme ||
+            !uri.Host.Equals(repo.Host, StringComparison.OrdinalIgnoreCase) || uri.Port != repo.Port ||
+            !string.IsNullOrEmpty(uri.UserInfo))
+            return false;
+        var prefix = repo.AbsolutePath.TrimEnd('/') + "/releases/download/";
+        // AbsolutePath ist normalisiert: „..“ ist schon aufgelöst und führt nicht aus dem Präfix hinaus.
+        return uri.AbsolutePath.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) && uri.AbsolutePath.Length > prefix.Length;
     }
 
     /// <summary>
@@ -78,7 +128,7 @@ public sealed class UpdateService
     /// <summary>Die Abfrage selbst, mit Repository und laufender Version als Angaben von außen.</summary>
     internal async Task<UpdateInfo?> CheckAsync(string repositoryUrl, Version currentVersion, CancellationToken ct = default)
     {
-        using var resp = await _http.GetAsync(LatestReleaseApi(repositoryUrl), ct);
+        using var resp = await Send(LatestReleaseApi(repositoryUrl), HttpCompletionOption.ResponseContentRead, ct);
         if (resp.StatusCode == HttpStatusCode.NotFound)
             return null; // noch kein Release (oder Repo nicht sichtbar)
         resp.EnsureSuccessStatusCode();
@@ -89,11 +139,16 @@ public sealed class UpdateService
         if (!TryParseVersion(release.TagName, out var version) || version <= currentVersion)
             return null;
 
-        var setup = release.Assets.FirstOrDefault(a => a.Name.EndsWith("-setup.exe", StringComparison.OrdinalIgnoreCase));
+        // Unvollständige Antworten (assets oder name fehlen) gelten als „kein Setup“, nicht als Fehler. Dateien, die
+        // nicht aus den Releases des Update-Repos kommen (Host, Pfad, Schema), werden nicht angefasst.
+        var assets = (release.Assets ?? []).OfType<GiteaAsset>()
+            .Where(a => a.Name is { Length: > 0 } && IsReleaseDownload(a.BrowserDownloadUrl, repositoryUrl))
+            .ToArray();
+        var setup = assets.FirstOrDefault(a => a.Name!.EndsWith("-setup.exe", StringComparison.OrdinalIgnoreCase));
         var checksum = setup == null ? null
-            : release.Assets.FirstOrDefault(a => a.Name.Equals(setup.Name + ".sha256", StringComparison.OrdinalIgnoreCase));
+            : assets.FirstOrDefault(a => a.Name!.Equals(setup.Name + ".sha256", StringComparison.OrdinalIgnoreCase));
 
-        return new UpdateInfo(version, release.HtmlUrl, setup?.BrowserDownloadUrl, setup?.Name, checksum?.BrowserDownloadUrl);
+        return new UpdateInfo(version, release.HtmlUrl ?? repositoryUrl, setup?.BrowserDownloadUrl, setup?.Name, checksum?.BrowserDownloadUrl);
     }
 
     /// <summary>Lädt das Setup, prüft die SHA-256-Prüfsumme und gibt den lokalen Pfad zurück.</summary>
@@ -104,19 +159,32 @@ public sealed class UpdateService
         if (update.ChecksumUrl == null)
             throw new InvalidOperationException("Das Release enthält keine Prüfsumme – Update wird nicht installiert.");
 
-        var expected = (await _http.GetStringAsync(update.ChecksumUrl, ct)).Trim().Split(' ', '\t', '\r', '\n')[0];
+        string checksumText;
+        using (var resp = await Send(update.ChecksumUrl, HttpCompletionOption.ResponseHeadersRead, ct))
+        {
+            resp.EnsureSuccessStatusCode();
+            using var buffer = new MemoryStream();
+            await CopyLimitedAsync(resp, buffer, MaxChecksumBytes, "Die Prüfsummen-Datei", ct);
+            checksumText = System.Text.Encoding.UTF8.GetString(buffer.ToArray());
+        }
+        var expected = checksumText.Trim().Split(' ', '\t', '\r', '\n')[0];
 
         // Jeder Download bekommt seinen eigenen Ordner. Läuft das Setup eines früheren Versuchs noch (es zeigt etwa
         // noch seinen Hinweis), hält es seine Datei fest; ein zweiter Download unter demselben Namen scheiterte daran.
         var folder = Path.Combine(DownloadRoot, Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(folder);
         var target = Path.Combine(folder, Path.GetFileName(update.SetupName));
-        using (var resp = await _http.GetAsync(update.SetupUrl, HttpCompletionOption.ResponseHeadersRead, ct))
+        try
         {
+            using var resp = await Send(update.SetupUrl, HttpCompletionOption.ResponseHeadersRead, ct);
             resp.EnsureSuccessStatusCode();
-            await using var net = await resp.Content.ReadAsStreamAsync(ct);
             await using var file = File.Create(target);
-            await net.CopyToAsync(file, ct);
+            await CopyLimitedAsync(resp, file, MaxSetupBytes, "Das Setup", ct);
+        }
+        catch
+        {
+            TryDelete(folder);
+            throw;
         }
 
         string actual;
@@ -129,6 +197,35 @@ public sealed class UpdateService
             throw new InvalidOperationException("Die Prüfsumme des Updates stimmt nicht – Download verworfen.");
         }
         return target;
+    }
+
+    /// <summary>Kopiert den Inhalt der Antwort, höchstens <paramref name="limit"/> Bytes; mehr ist ein Fehler.</summary>
+    private static async Task CopyLimitedAsync(HttpResponseMessage resp, Stream target, long limit, string what, CancellationToken ct)
+    {
+        if (resp.Content.Headers.ContentLength is long announced && announced > limit)
+            throw new InvalidOperationException($"{what} ist größer als erlaubt ({announced} Bytes) – Update verworfen.");
+        await using var net = await resp.Content.ReadAsStreamAsync(ct);
+        var buffer = new byte[81920];
+        long total = 0;
+        int read;
+        while ((read = await net.ReadAsync(buffer, ct)) > 0)
+        {
+            total += read;
+            if (total > limit)
+                throw new InvalidOperationException($"{what} ist größer als erlaubt – Update verworfen.");
+            await target.WriteAsync(buffer.AsMemory(0, read), ct);
+        }
+    }
+
+    private static void TryDelete(string folder)
+    {
+        try
+        {
+            Directory.Delete(folder, recursive: true);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+        }
     }
 
     /// <summary>Startet das Setup still. Es wartet, bis sich die App beendet hat, und startet sie danach neu.</summary>
@@ -200,17 +297,17 @@ public sealed class UpdateService
 
     private sealed class GiteaRelease
     {
-        [JsonPropertyName("tag_name")] public string TagName { get; set; } = "";
-        [JsonPropertyName("html_url")] public string HtmlUrl { get; set; } = "";
+        [JsonPropertyName("tag_name")] public string? TagName { get; set; }
+        [JsonPropertyName("html_url")] public string? HtmlUrl { get; set; }
         [JsonPropertyName("draft")] public bool Draft { get; set; }
         [JsonPropertyName("prerelease")] public bool Prerelease { get; set; }
-        [JsonPropertyName("assets")] public GiteaAsset[] Assets { get; set; } = [];
+        [JsonPropertyName("assets")] public GiteaAsset?[]? Assets { get; set; }
     }
 
     private sealed class GiteaAsset
     {
-        [JsonPropertyName("name")] public string Name { get; set; } = "";
-        [JsonPropertyName("browser_download_url")] public string BrowserDownloadUrl { get; set; } = "";
+        [JsonPropertyName("name")] public string? Name { get; set; }
+        [JsonPropertyName("browser_download_url")] public string? BrowserDownloadUrl { get; set; }
     }
 }
 
