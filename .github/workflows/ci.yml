@@ -29,6 +29,11 @@ jobs:
     name: Tests, Setup, Installer-Prüfungen
     runs-on: windows-latest
     timeout-minutes: 30
+    # Für die Bescheinigung der Build-Provenienz (unten) braucht nur dieser Job mehr als Lesen.
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     env:
       DOTNET_NOLOGO: 'true'
       DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
@@ -72,6 +77,24 @@ jobs:
         shell: pwsh
         run: ./tests/installer/Test-Installer.ps1
 
+      # Sammeldatei der Prüfsummen im üblichen Format (sha256sum -c SHA256SUMS), neben der .sha256 je Setup.
+      - name: SHA256SUMS
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem artifacts/*/WidgetTea-*-setup.exe | Select-Object -First 1
+          $line = "$((Get-FileHash $setup.FullName -Algorithm SHA256).Hash.ToLowerInvariant())  $($setup.Name)"
+          Set-Content -LiteralPath (Join-Path $setup.DirectoryName 'SHA256SUMS') -Value $line -Encoding ascii
+          Write-Host $line
+
+      # Bescheinigt, dass genau dieses Setup in diesem Lauf aus diesem Commit gebaut wurde (Issue 43, D18).
+      # Nur außerhalb von Pull Requests: Veröffentlicht wird nur, was auf main gebaut wurde.
+      # Prüfen: gh attestation verify WidgetTea-<Version>-setup.exe --repo Celestial0579/WidgetTea
+      - name: Build-Provenienz bescheinigen
+        if: github.event_name != 'pull_request'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: artifacts/*/WidgetTea-*-setup.exe
+
       - name: Setup als Artefakt
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -79,6 +102,7 @@ jobs:
           path: |
             artifacts/*/WidgetTea-*-setup.exe
             artifacts/*/WidgetTea-*-setup.exe.sha256
+            artifacts/*/SHA256SUMS
           if-no-files-found: error
           retention-days: 14
 
