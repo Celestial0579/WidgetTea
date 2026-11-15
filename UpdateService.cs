@@ -141,8 +141,8 @@ public sealed class UpdateService
 
         // Unvollständige Antworten (assets oder name fehlen) gelten als „kein Setup“, nicht als Fehler. Dateien, die
         // nicht aus den Releases des Update-Repos über https kommen, werden nicht angefasst.
-        var assets = (release.Assets ?? [])
-            .Where(a => a?.Name is { Length: > 0 } && IsReleaseDownload(a.BrowserDownloadUrl, repositoryUrl))
+        var assets = (release.Assets ?? []).OfType<GiteaAsset>()
+            .Where(a => a.Name is { Length: > 0 } && IsReleaseDownload(a.BrowserDownloadUrl, repositoryUrl))
             .ToArray();
         var setup = assets.FirstOrDefault(a => a.Name!.EndsWith("-setup.exe", StringComparison.OrdinalIgnoreCase));
         var checksum = setup == null ? null
