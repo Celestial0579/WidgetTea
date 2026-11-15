@@ -325,7 +325,16 @@ Function UpdateDeclined
   ${Else}
     StrCpy $R6 "Ist „Updates automatisch installieren“ eingeschaltet, kommt diese Abfrage nach jedem Start erneut. In den Einstellungen lässt sich das ausschalten."
   ${EndIf}
-  MessageBox MB_OK|MB_ICONINFORMATION|MB_TOPMOST "$R4$R5$\r$\n$\r$\n$R6"
+  ; Vor anderen Fenstern zeigen, auch vor dem Browser, den der Ausweichweg geöffnet hat (Issue 30): MessageBox mit
+  ; MB_TOPMOST kam dort ohne „immer im Vordergrund“ an. Wie „Wiederholen/Abbrechen“ (Issue 11) mit MB_SYSTEMMODAL.
+  Push "$R4$R5$\r$\n$\r$\n$R6"
+  Push 0x00051040              ; MB_OK | MB_ICONINFORMATION | MB_SYSTEMMODAL | MB_SETFOREGROUND | MB_TOPMOST
+  Push 0                       ; ohne Zeitablauf
+  Call DotnetTimedBox
+  Pop $R7
+  ${If} $R7 == 0                ; Fenster ließ sich nicht zeigen: wie bisher
+    MessageBox MB_OK|MB_ICONINFORMATION|MB_TOPMOST "$R4$R5$\r$\n$\r$\n$R6"
+  ${EndIf}
 FunctionEnd
 
 ; Entfernt, was Version 1.0.0 installiert hat, samt der .NET-Laufzeit, die sie selbst mitbrachte. Die muss weg:
