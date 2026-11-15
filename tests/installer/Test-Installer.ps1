@@ -40,6 +40,8 @@
        kommt.
    15  Ein Installationsordner außerhalb des Benutzerprofils erbt keine Rechte mehr: Zugriff haben nur der Benutzer,
        SYSTEM und die Administratoren, auch auf Dateien, die schon darin lagen. Im Profil bleibt alles wie bisher.
+   16  Installation, Start und Deinstallation in einem Ordner mit Leerzeichen, Umlauten und langem Namen; ein
+       abgeschalteter Autostart bleibt aus, wenn man das Setup von Hand noch einmal ausführt.
 
   Für 3, 4, 6 und 8 wird das Setup ein zweites Mal gebaut, mit einer Mindestversion der Laufzeit, die es nicht
   gibt (/DDOTNET_MINPATCH=999), und mit kurzem Zeitablauf der Nachfrage. So lässt sich „Laufzeit fehlt“ auf
@@ -1082,5 +1084,31 @@ Check (-not (Get-Acl -LiteralPath $target).AreAccessRulesProtected) 'Im Benutzer
 Start-Process -FilePath (Join-Path $target 'uninstall.exe') -ArgumentList '/S' -Wait
 Wait-Gone $target
 Check (-not (Test-Path $target)) 'Die Deinstallation entfernt den Ordner'
+
+# ---------------------------------------------------------------- 16 Ungewöhnliche Pfade, Autostart beim Update von Hand
+
+Step '16 Ordner mit Leerzeichen, Umlauten und langem Namen; ein abgeschalteter Autostart bleibt aus'
+# Issue 43 (C14, B9). Lang, aber unter 260 Zeichen samt Dateinamen: Darüber kämen NSIS und der Starter von .NET
+# ohnehin nicht, und Windows legt solche Ordner ohne Freischaltung langer Pfade gar nicht erst an.
+$target = Join-Path $work ('Ordner mit Leerzeichen – Ümläüte ß & Co\' + ('lang' * 20))
+Write-Host "       Ordner: $target ($($target.Length) Zeichen)"
+$r = Invoke-Setup $setup @('/S', "/D=$target")
+Check ($r.ExitCode -eq 0) "Exitcode 0 (war $($r.ExitCode))"
+Check ((Get-ItemProperty $regKey).InstallDir -eq $target) 'Der Installationsort ist richtig vermerkt'
+Check ((Get-ItemProperty -Path $runKey -Name 'WidgetTea').WidgetTea -eq ('"' + (Join-Path $target 'WidgetTea.exe') + '"')) 'Der Autostart zeigt in Anführungszeichen auf die EXE'
+$runtime = Get-RuntimeOfApp (Join-Path $target 'WidgetTea.exe') 'pfad-mit-umlauten'
+Check ($runtime -match '\\shared\\Microsoft\.NETCore\.App\\10\.0\.\d+\\coreclr\.dll$') 'Die App startet aus diesem Ordner'
+
+# Autostart im Einstellungsfenster abgeschaltet, dann das Setup von Hand (ohne /RESTART) noch einmal: Er bleibt aus.
+Remove-ItemProperty -Path $runKey -Name 'WidgetTea'
+$r = Invoke-Setup $setup @('/S', "/D=$target")
+Check ($r.ExitCode -eq 0) "Exitcode 0 (war $($r.ExitCode))"
+Check (-not (Get-ItemProperty -Path $runKey -Name 'WidgetTea' -ErrorAction SilentlyContinue)) 'Ein abgeschalteter Autostart bleibt beim Update von Hand aus'
+
+Start-Process -FilePath (Join-Path $target 'uninstall.exe') -ArgumentList '/S' -Wait
+Wait-Gone $target
+Check (-not (Test-Path $target)) 'Die Deinstallation entfernt den Ordner'
+Check (-not (Test-Path $regKey)) 'Die Registry-Einträge sind weg'
+Remove-Item -LiteralPath (Join-Path $work 'Ordner mit Leerzeichen – Ümläüte ß & Co') -Recurse -Force -ErrorAction SilentlyContinue
 
 Write-Host "`nAlle Installer-Prüfungen bestanden." -ForegroundColor Green

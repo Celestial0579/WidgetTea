@@ -20,6 +20,12 @@ ManifestDPIAware true
 SetCompressor /SOLID lzma
 RequestExecutionLevel user
 
+; Ab NSIS 3.04 lädt das Setup Systembibliotheken nur aus System32: Ein Setup im Download-Ordner zieht keine
+; fremden DLLs nach, die dort zufällig liegen (Issue 43, A5). Ein älteres NSIS baut deshalb nicht.
+!if ${NSIS_PACKEDVERSION} < 0x03004000
+  !error "WidgetTea braucht NSIS 3.04 oder neuer (gefunden: ${NSIS_VERSION})."
+!endif
+
 !ifndef VERSION
   !error "VERSION fehlt (/DVERSION=x.y.z)"
 !endif
@@ -498,6 +504,8 @@ Function .onInit
   ; Beim Selbst-Update hat sich die App schon beendet: auch still nachfragen. Bricht der Nutzer ab, schaltet
   ; UpdateDeclined die automatischen Updates aus und startet die alte Version wieder. Bis hierher ist an der
   ; vorhandenen Installation nichts verändert.
+  Call KeepAutostartChoice
+
   StrCpy $DotnetAsk $Restart
   ${If} $Restart == 1
     GetFunctionAddress $DotnetAbortHook UpdateDeclined
@@ -639,6 +647,19 @@ Section "Mit Windows starten" SecAutostart
     WriteRegStr HKCU "${RUNKEY}" "${APPNAME}" '"$INSTDIR\${EXENAME}"'
   ${EndIf}
 SectionEnd
+
+; Ist WidgetTea schon installiert und der Autostart aus (im Einstellungsfenster abgeschaltet), bleibt er auch bei
+; einem Update von Hand aus: „Mit Windows starten“ ist dann nicht vorausgewählt (Issue 43, B9). Beim Selbst-Update
+; schreibt die Sektion ohnehin nichts.
+Function KeepAutostartChoice
+  ${If} ${FileExists} "$INSTDIR\${EXENAME}"
+    ClearErrors
+    ReadRegStr $R1 HKCU "${RUNKEY}" "${APPNAME}"
+    ${If} ${Errors}
+      SectionSetFlags ${SecAutostart} 0
+    ${EndIf}
+  ${EndIf}
+FunctionEnd
 
 !insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
   !insertmacro MUI_DESCRIPTION_TEXT ${SecMain} "Das Widget (benötigt die .NET Desktop Runtime ${DOTNET_MAJOR})."
