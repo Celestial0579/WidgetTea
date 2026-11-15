@@ -137,6 +137,7 @@ Var Restart
 !define MUI_LICENSEPAGE_TEXT_TOP "WidgetTea ist freie Software unter der MIT-Lizenz."
 !insertmacro MUI_PAGE_LICENSE "..\LICENSE"
 !insertmacro MUI_PAGE_COMPONENTS
+!define MUI_PAGE_CUSTOMFUNCTION_LEAVE DirectoryLeave
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_PAGE_FINISH
@@ -501,12 +502,80 @@ Function .onInstFailed
   ${EndIf}
 FunctionEnd
 
+; ---------- Rechte des Installationsordners (Issue 34) ----------
+; Unter dem Benutzerprofil (Vorgabe: %LOCALAPPDATA%\Programs\WidgetTea) kann nur der Benutzer selbst schreiben.
+; Ein frei gewählter Ordner wie C:\WidgetTea erbt dagegen die Rechte seines Elternordners; dort dürfen oft alle
+; angemeldeten Benutzer Dateien anlegen. Ein anderer Benutzer könnte dann WidgetTea.exe oder eine DLL austauschen,
+; und der Autostart führte sie mit den Rechten des Opfers aus.
+
+; $R0 = 1, wenn $INSTDIR nicht im Benutzerprofil liegt, sonst 0
+Function IsOutsideProfile
+  Push $R1
+  Push $R2
+  StrLen $R1 "$PROFILE"
+  StrCpy $R2 "$INSTDIR" $R1
+  StrCpy $R0 1
+  ${If} $R2 == "$PROFILE"           ; der Vergleich von LogicLib achtet nicht auf Groß- und Kleinschreibung
+    StrCpy $R2 "$INSTDIR" 1 $R1
+    ${If} $R2 == "\"
+    ${OrIf} $R2 == ""
+      StrCpy $R0 0
+    ${EndIf}
+  ${EndIf}
+  Pop $R2
+  Pop $R1
+FunctionEnd
+
+Function DirectoryLeave
+  Push $R0
+  Call IsOutsideProfile
+  ${If} $R0 == 1
+    MessageBox MB_YESNO|MB_ICONEXCLAMATION "Der Ordner liegt außerhalb deines Benutzerprofils.$\r$\n$\r$\nDas Setup beschränkt seine Rechte auf dich, damit kein anderer Benutzer die Programmdateien austauschen kann. Gehört der Ordner einem anderen Benutzer oder liegen dort schon fremde Dateien, hilft das nicht.$\r$\n$\r$\nTrotzdem dorthin installieren?" IDYES ok
+    Pop $R0
+    Abort
+  ok:
+  ${EndIf}
+  Pop $R0
+FunctionEnd
+
+; Außerhalb des Profils: Vererbung aus, Vollzugriff nur für den Benutzer, SYSTEM und die Administratoren; was
+; schon im Ordner liegt, übernimmt diese Rechte. Gelingt das nicht, wird nicht installiert.
+Function SecureInstDir
+  Push $R0
+  Push $R1
+  Push $R2
+  Call IsOutsideProfile
+  ${If} $R0 == 1
+    CreateDirectory "$INSTDIR"
+    ReadEnvStr $R1 USERDOMAIN
+    ReadEnvStr $R2 USERNAME
+    nsExec::ExecToStack '"$SYSDIR\icacls.exe" "$INSTDIR" /inheritance:r /grant:r "$R1\$R2:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F"'
+    Pop $R0                         ; Exitcode
+    Pop $R1                         ; Ausgabe
+    ${If} $R0 != 0
+      MessageBox MB_OK|MB_ICONSTOP "Die Rechte des Installationsordners ließen sich nicht auf dich beschränken:$\r$\n$INSTDIR$\r$\n$\r$\nBitte einen Ordner im eigenen Benutzerprofil wählen." /SD IDOK
+      Pop $R2
+      Pop $R1
+      Pop $R0
+      Abort
+    ${EndIf}
+    ; Was schon darin liegt, erbt ab jetzt nur noch diese Rechte (fremde ausdrückliche Rechte fallen weg).
+    nsExec::ExecToStack '"$SYSDIR\icacls.exe" "$INSTDIR\*" /reset /T /C /Q'
+    Pop $R0
+    Pop $R1
+  ${EndIf}
+  Pop $R2
+  Pop $R1
+  Pop $R0
+FunctionEnd
+
 ; ---------- Installation ----------
 
 Section "WidgetTea (erforderlich)" SecMain
   SectionIn RO
   SetShellVarContext current
   Call CloseRunningApp
+  Call SecureInstDir
 
   ; Frühere Versionen brachten die .NET-Laufzeit selbst mit – erkennbar an coreclr.dll neben der EXE.
   ${If} ${FileExists} "$INSTDIR\coreclr.dll"
