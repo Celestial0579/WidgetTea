@@ -34,7 +34,8 @@
    13  Scheitert die Installation beim Selbst-Update (/S /RESTART), startet das Setup die App trotzdem wieder.
    14  „Ja" auf die Nachfrage nach der Laufzeit: ohne winget führt der Weg zu „Wiederholen/Abbrechen", das im
        stillen Modus nicht ewig wartet; mit winget ruft das Setup es auf, und scheitert die Installation
-       (Paket, das es nicht gibt), geht es ebenfalls dorthin.
+       (Paket, das es nicht gibt), geht es ebenfalls dorthin – auch von Hand gestartet. „Wiederholen/Abbrechen“
+       ist dabei „immer im Vordergrund“ und bleibt sichtbar, wenn ein anderes Programm davor aufgeht.
 
   Für 3, 4, 6 und 8 wird das Setup ein zweites Mal gebaut, mit einer Mindestversion der Laufzeit, die es nicht
   gibt (/DDOTNET_MINPATCH=999), und mit kurzem Zeitablauf der Nachfrage. So lässt sich „Laufzeit fehlt“ auf
@@ -99,6 +100,28 @@ public static class WtDialogs
     [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr hWnd);
     [DllImport("user32.dll")] private static extern int GetDlgCtrlID(IntPtr hWnd);
     [DllImport("user32.dll")] private static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr w, IntPtr l);
+    [DllImport("user32.dll")] private static extern int GetWindowLong(IntPtr hWnd, int index);
+    [DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr hWnd, out RECT r);
+    [DllImport("user32.dll")] private static extern IntPtr WindowFromPoint(POINT p);
+    [DllImport("user32.dll")] private static extern IntPtr GetAncestor(IntPtr hWnd, uint flags);
+    [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
+    [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X, Y; }
+
+    // „Immer im Vordergrund“ (WS_EX_TOPMOST)
+    public static bool IsTopmost(long hWnd)
+    {
+        return (GetWindowLong(new IntPtr(hWnd), -20 /* GWL_EXSTYLE */) & 0x8) != 0;
+    }
+
+    // Liegt das Fenster in seiner Mitte zuoberst, oder verdeckt es dort ein anderes?
+    public static bool VisibleAtCenter(long hWnd)
+    {
+        RECT r;
+        if (!GetWindowRect(new IntPtr(hWnd), out r)) return false;
+        POINT p; p.X = (r.Left + r.Right) / 2; p.Y = (r.Top + r.Bottom) / 2;
+        IntPtr top = WindowFromPoint(p);
+        return top != IntPtr.Zero && GetAncestor(top, 2 /* GA_ROOT */).ToInt64() == hWnd;
+    }
 
     public static long[] Find(int pid)
     {
@@ -878,6 +901,39 @@ $setupWingetFails = Join-Path $work 'WidgetTea-winget-scheitert-setup.exe'
 if ($LASTEXITCODE) { throw 'makensis (Testfassung mit unbekanntem Paket) fehlgeschlagen' }
 
 $nowhere = Join-Path $work 'nirgends'
+
+# „Wiederholen/Abbrechen“ erscheint, während sich der Browser mit dem Download öffnet. Es muss vor ihm liegen,
+# sonst findet der Nutzer nach der Installation der Laufzeit das Fenster nicht, in dem es weitergeht (Issue 11).
+# Geprüft wird, solange es offen ist: „immer im Vordergrund“ und, wenn $Cover, auch dann noch zuoberst, wenn ein
+# anderes Programm maximiert davor aufgeht (hier der Editor statt des Browsers).
+$script:front = $null
+function Test-RetryFront([switch]$Cover) {
+    # $h ist das Fenster, das Invoke-Setup gerade beantwortet (der Skriptblock läuft in dessen Bereich)
+    $result = [ordered]@{ Topmost = [WtDialogs]::IsTopmost($h); Covered = $false; Visible = $null }
+    if ($Cover) {
+        Start-Process -FilePath "$env:WINDIR\System32\notepad.exe" -WindowStyle Maximized
+        $until = (Get-Date).AddSeconds(15)
+        do {
+            Start-Sleep -Milliseconds 250
+            $editor = @(Get-Process -Name 'notepad' -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 })
+        } while (-not $editor -and (Get-Date) -lt $until)
+        $result.Covered = [bool]$editor
+        Start-Sleep -Seconds 1
+        $result.Visible = [WtDialogs]::VisibleAtCenter($h)
+        Get-Process -Name 'notepad' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    }
+    $script:front = [pscustomobject]$result
+    @('Cancel', 'Abbrechen')
+}
+function Check-RetryFront([switch]$Cover) {
+    Check ($null -ne $script:front) '„Wiederholen/Abbrechen“ wurde geprüft, solange es offen war'
+    Check $script:front.Topmost '„Wiederholen/Abbrechen“ ist „immer im Vordergrund“'
+    if ($Cover) {
+        Check $script:front.Covered 'Der Editor ging maximiert auf'
+        Check $script:front.Visible '„Wiederholen/Abbrechen“ bleibt sichtbar, wenn ein anderes Programm maximiert davor aufgeht'
+    }
+    $script:front = $null
+}
 $ask = 'Jetzt installieren?'
 $banner = 'Windows-Abfrage bitte'
 $retry = 'wird von Microsoft heruntergeladen'
@@ -886,10 +942,11 @@ $retry = 'wird von Microsoft heruntergeladen'
 $r = Invoke-Setup $setupNoWinget @('/S', '/RESTART', "/D=$nowhere") ([ordered]@{
     $ask    = @('Yes', 'Ja')
     $banner = @()
-    $retry  = @('Cancel', 'Abbrechen')
+    $retry  = { Test-RetryFront }
 })
 Check ($r.ExitCode -eq 3) "Exitcode 3 (war $($r.ExitCode))"
 Check ($r.Seen -contains $retry) 'Nach Ja kam „Wiederholen/Abbrechen"'
+Check-RetryFront
 Check (-not ($r.Seen -contains $banner)) 'winget wurde nicht aufgerufen (es fehlt)'
 Check (-not (Test-Path $nowhere)) 'Installiert wurde nichts'
 
@@ -909,12 +966,25 @@ if (Test-Path -LiteralPath (Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\w
     $r = Invoke-Setup $setupWingetFails @('/S', '/RESTART', "/D=$nowhere") ([ordered]@{
         $ask    = @('Yes', 'Ja')
         $banner = @()
-        $retry  = @('Cancel', 'Abbrechen')
+        $retry  = { Test-RetryFront }
     }) -TimeoutSec 600
     Check ($r.ExitCode -eq 3) "Exitcode 3 (war $($r.ExitCode))"
     Check ($r.Seen -contains $banner) 'Das Setup hat winget aufgerufen und währenddessen den Hinweis gezeigt'
     Check ($r.Seen -contains $retry) 'Nach dem Scheitern von winget kam „Wiederholen/Abbrechen"'
+    Check-RetryFront
     Write-Host "       winget lief etwa $([int]($r.SeenAt[$retry] - $r.SeenAt[$banner]).TotalSeconds) s"
+    Check (-not (Test-Path $nowhere)) 'Installiert wurde nichts'
+
+    # d) Derselbe Weg von Hand gestartet (ohne /S), wie in der Test-VM bei Issue 11: Dort lag „Wiederholen/Abbrechen“
+    #    hinter dem Browser und war nicht „immer im Vordergrund“.
+    $r = Invoke-Setup $setupWingetFails @("/D=$nowhere") ([ordered]@{
+        $ask    = @('Yes', 'Ja')
+        $banner = @()
+        $retry  = { Test-RetryFront -Cover }
+    }) -TimeoutSec 600
+    Check ($r.ExitCode -eq 3) "Exitcode 3 (war $($r.ExitCode))"
+    Check ($r.Seen -contains $retry) 'Von Hand gestartet: Nach dem Scheitern von winget kam „Wiederholen/Abbrechen"'
+    Check-RetryFront -Cover
     Check (-not (Test-Path $nowhere)) 'Installiert wurde nichts'
 } else {
     Note 'winget fehlt auf diesem Rechner, der Aufruf über winget ist hier nicht zu prüfen'
