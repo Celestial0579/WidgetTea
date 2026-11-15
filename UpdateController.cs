@@ -95,7 +95,11 @@ public sealed class UpdateController
             else if (isNew)
                 UpdateStalled?.Invoke(info);   // nicht noch einmal von selbst: Das Widget schlösse sich nach jedem Start
         }
-        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or System.Text.Json.JsonException)
+        // Auch eine unvollständige oder unsinnige Antwort (ungültige Adresse, falscher Inhaltstyp) ist nur ein
+        // gescheiterter Versuch. Die Aufgabe läuft ohne Beobachter (_ = CheckAsync): Was hier nicht gefangen wird,
+        // verschwindet still, auch bei der Suche von Hand.
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or System.Text.Json.JsonException
+                                       or InvalidOperationException or UriFormatException or NotSupportedException)
         {
             if (manual)
                 Message?.Invoke("Update-Server nicht erreichbar – später erneut versuchen.");
@@ -134,7 +138,8 @@ public sealed class UpdateController
             Application.Current.Shutdown();
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or InvalidOperationException or IOException
-                                       or System.ComponentModel.Win32Exception)
+                                       or System.ComponentModel.Win32Exception or UriFormatException or NotSupportedException
+                                       or UnauthorizedAccessException)
         {
             Message?.Invoke("Update fehlgeschlagen: " + ex.Message);
         }
