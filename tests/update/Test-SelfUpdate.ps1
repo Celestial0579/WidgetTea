@@ -49,9 +49,9 @@ $target = Join-Path $work 'installiert'
 $targetExe = Join-Path $target 'WidgetTea.exe'
 $settingsDir = Join-Path $env:LOCALAPPDATA 'WidgetTea'
 $attemptFile = Join-Path $settingsDir 'update-attempt.json'
-$regKey = 'HKCU:\Software\WidgetTea'
+$regKey = 'HKCU:\Software\Celestial0579\WidgetTea'
 
-if ((Test-Path $regKey) -and -not $Force) { throw "WidgetTea ist auf diesem Rechner schon installiert ($regKey). Abbruch." }
+if (((Test-Path $regKey) -or (Test-Path 'HKCU:\Software\WidgetTea')) -and -not $Force) { throw "WidgetTea ist auf diesem Rechner schon installiert ($regKey). Abbruch." }
 Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $work, $serve, $logs | Out-Null
 
