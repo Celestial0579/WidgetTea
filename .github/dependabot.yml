@@ -1,0 +1,21 @@
+# Hält die Actions der CI (per Commit-SHA festgelegt) und die NuGet-Pakete von App und Tests aktuell.
+# Dependabot schlägt Updates als Pull Request vor; gemergt wird nach grüner CI.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: nuget
+    directories:
+      - /
+      - /tests/WidgetTea.Tests
+    schedule:
+      interval: weekly
+    groups:
+      nuget:
+        patterns: ["*"]
