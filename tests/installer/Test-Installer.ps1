@@ -71,14 +71,17 @@ $logs = Join-Path $root 'artifacts\test-logs'
 $work = Join-Path $(if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { $env:TEMP }) 'widgettea-installertest'
 $settingsDir = Join-Path $env:LOCALAPPDATA 'WidgetTea'
 $settingsFile = Join-Path $settingsDir 'settings.json'
-$regKey = 'HKCU:\Software\WidgetTea'
+$regKey = 'HKCU:\Software\Celestial0579\WidgetTea'   # seit 1.1.3 unter dem Herstellerschlüssel
+$oldRegKey = 'HKCU:\Software\WidgetTea'             # bis 1.1.2
+$vendorKey = 'HKCU:\Software\Celestial0579'
+$startupApprovedKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run'
 $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
 $oldVersion = '1.0.0'
 $askTimeout = 10   # Sekunden, die die Nachfrage der Testfassung auf eine Antwort wartet (im echten Setup 120)
 $oldSetupUrl = "https://github.com/Celestial0579/WidgetTea/releases/download/v$oldVersion/WidgetTea-$oldVersion-setup.exe"
 
 if (-not (Test-Path $setup)) { throw "Setup fehlt: $setup – erst build\release.ps1 laufen lassen." }
-if ((Test-Path $regKey) -and -not $Force) { throw "WidgetTea ist auf diesem Rechner schon installiert ($regKey). Abbruch." }
+if (((Test-Path $regKey) -or (Test-Path $oldRegKey)) -and -not $Force) { throw "WidgetTea ist auf diesem Rechner schon installiert ($regKey oder $oldRegKey). Abbruch." }
 
 Remove-Item -Recurse -Force $work, $logs -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $work, $logs | Out-Null
@@ -347,11 +350,19 @@ Check ((Get-Item (Join-Path $fresh 'WidgetTea.exe')).VersionInfo.ProductVersion 
 $runtime = Get-RuntimeOfApp (Join-Path $fresh 'WidgetTea.exe') 'neuinstallation'
 Check ($runtime -match '\\shared\\Microsoft\.NETCore\.App\\10\.0\.\d+\\coreclr\.dll$') 'Die App startet mit der installierten Laufzeit'
 
+Check (-not (Test-Path $oldRegKey)) 'Unter dem alten Schlüssel ohne Hersteller steht nichts'
+
+# So sieht es aus, wenn jemand den Autostart im Task-Manager abgeschaltet hat: Windows legt dafür einen Wert an.
+if (-not (Test-Path $startupApprovedKey)) { New-Item -Path $startupApprovedKey -Force | Out-Null }
+New-ItemProperty -Path $startupApprovedKey -Name 'WidgetTea' -PropertyType Binary -Value ([byte[]](3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)) -Force | Out-Null
+
 Start-Process -FilePath (Join-Path $fresh 'uninstall.exe') -ArgumentList '/S' -Wait
 $deadline = (Get-Date).AddSeconds(60)
 while ((Test-Path $fresh) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 500 }
 Check (-not (Test-Path $fresh)) 'Deinstallation entfernt den Ordner'
 Check (-not (Test-Path $regKey)) 'Deinstallation entfernt die Registry-Einträge'
+Check (-not (Test-Path $vendorKey)) 'Der leere Herstellerschlüssel ist auch weg'
+Check (-not (Get-ItemProperty -Path $startupApprovedKey -Name 'WidgetTea' -ErrorAction SilentlyContinue)) 'Deinstallation entfernt den Vermerk des Task-Managers zum Autostart'
 Check (-not (Get-ItemProperty -Path $runKey -Name 'WidgetTea' -ErrorAction SilentlyContinue)) 'Deinstallation entfernt den Autostart'
 
 # ---------------------------------------------------------------- 2 Ausgangslage 1.0.0
@@ -367,6 +378,7 @@ $dir = Join-Path $work 'update'
 $r = Invoke-Setup $oldSetup @('/S', "/D=$dir")
 Check ($r.ExitCode -eq 0) "Exitcode 0 (war $($r.ExitCode))"
 Check (Test-Path (Join-Path $dir 'coreclr.dll')) "$oldVersion bringt die .NET-Laufzeit selbst mit"
+Check ((Get-ItemProperty $oldRegKey).InstallDir -eq $dir) "$oldVersion vermerkt den Installationsort unter dem alten Schlüssel"
 Write-Host "       $((Get-ChildItem $dir -Recurse -File).Count) Dateien, $((Get-ChildItem $dir -Directory).Count) Unterordner"
 
 # Beim Update entfernt das Setup genau die Dateien von $oldVersion (installer\Bundled-1.0.0.nsh). Die Liste dort muss
@@ -471,6 +483,9 @@ Check (Test-Path (Join-Path $dir 'meine-notizen.txt')) 'Die fremde Datei im Haup
 Check (Test-Path (Join-Path $dir 'eigene-bibliothek.dll')) 'Die fremde DLL im Hauptordner ist noch da'
 Check (Test-SameSnapshot $foreignBefore (Get-Snapshot (Join-Path $dir 'eigener-ordner'))) 'Der fremde Unterordner ist unverändert'
 Check ((Get-Item (Join-Path $dir 'WidgetTea.exe')).VersionInfo.ProductVersion -like "$version*") "Installiert ist Version $version"
+# Der Updater ruft ohne /D= auf: Das Setup fand den Ordner unter dem alten Schlüssel und zieht den Eintrag um.
+Check ((Get-ItemProperty $regKey -ErrorAction SilentlyContinue).InstallDir -eq $dir) 'Der Installationsort steht jetzt unter dem Herstellerschlüssel'
+Check (-not (Test-Path $oldRegKey)) 'Der alte Schlüssel ohne Hersteller ist weg'
 Check ((Read-Settings) -ceq $settingsOriginal) 'Die Einstellungen sind wieder genau wie vorher, automatische Updates an'
 Check (-not (Test-Marker)) 'Der Merker ist gelöscht'
 if ($relaunched) { Ok 'Das Setup hat die neue Version gestartet' } else { Note 'Start durch das Setup hier nicht beobachtet (explorer.exe startet in dieser Sitzung nichts?)' }

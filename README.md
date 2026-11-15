@@ -14,6 +14,14 @@ Desktop-Widget für Windows, das die eigene Contribution-Heatmap aus einem [Gite
 
 `WidgetTea-<version>-setup.exe` aus den [Releases](https://github.com/Celestial0579/WidgetTea/releases/latest) laden und ausführen.
 Installiert wird nur für das eigene Benutzerkonto (`%LOCALAPPDATA%\Programs\WidgetTea`), ohne Adminrechte.
+Das ist der unter Windows übliche Ort für Programme, die nur für ein Konto installiert werden; `C:\Program Files` bleibt
+Programmen für alle Konten vorbehalten und bräuchte Adminrechte. Einen eigenen Ordner direkt unter `C:\` legt das Setup nie
+von selbst an. Wählt man im Assistenten einen Ordner außerhalb des eigenen Profils, fragt es nach und beschränkt dessen
+Rechte auf das eigene Konto.
+In der Registry schreibt das Setup nur unter `HKCU`: den Eintrag unter „Apps“ (`…\CurrentVersion\Uninstall\WidgetTea`),
+den Installationsort unter dem Herstellerschlüssel `Software\Celestial0579\WidgetTea` und, wenn gewählt, den Autostart
+(`…\CurrentVersion\Run`). Die Deinstallation entfernt alle drei, dazu einen Vermerk, den der Task-Manager beim
+Abschalten des Autostarts anlegt.
 Voraussetzung ist die [.NET Desktop Runtime 10](https://dotnet.microsoft.com/download/dotnet/10.0) (x64, mindestens 10.0.14). Fehlt sie oder ist sie veraltet,
 fragt das Setup – auch bei einem Selbst-Update – vor der Installation nach und installiert sie per `winget` (Adminrechte nötig);
 wo `winget` fehlt oder scheitert, öffnet es den Download von Microsoft.
