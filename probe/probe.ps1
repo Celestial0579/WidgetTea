@@ -24,7 +24,7 @@ public static class P {
   public static bool Fg(long h) { return GetForegroundWindow().ToInt64() == h; }
 }
 '@
-foreach ($m in 'base', 'destroy', 'keep', 'attach') {
+foreach ($m in 'base', 'destroy', 'sysmodal', 'owner') {
   $p = Start-Process -FilePath "$PSScriptRoot\probe-$m.exe" -PassThru
   $h = 0; $until = (Get-Date).AddSeconds(20)
   while (-not $h -and (Get-Date) -lt $until) { Start-Sleep -Milliseconds 200; $h = [P]::Box($p.Id) }

@@ -12,6 +12,6 @@ jobs:
         run: |
           choco install nsis -y --no-progress | Out-Null
           $mk = @("${env:ProgramFiles(x86)}\NSIS\makensis.exe", "$env:ProgramFiles\NSIS\makensis.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
-          foreach ($m in 'base', 'destroy', 'keep', 'attach') { & $mk /V1 /INPUTCHARSET UTF8 "/DMODE=$m" "/DOUT=$PWD\probe\probe-$m.exe" probe\probe.nsi; if ($LASTEXITCODE) { throw "makensis $m" } }
+          foreach ($m in 'base', 'destroy', 'sysmodal', 'owner') { & $mk /V1 /INPUTCHARSET UTF8 "/DMODE=$m" "/DOUT=$PWD\probe\probe-$m.exe" probe\probe.nsi; if ($LASTEXITCODE) { throw "makensis $m" } }
           ./probe/probe.ps1
           exit 0

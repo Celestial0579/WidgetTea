@@ -20,7 +20,19 @@ Function .onInit
     System::Call 'kernel32::GetCurrentThreadId() i .r7'
     System::Call 'user32::AttachThreadInput(i r7, i r6, i 1) i .r8'
   !endif
-  System::Call 'user32::MessageBoxTimeoutW(p 0, w "Probe ${MODE}: wird von Microsoft heruntergeladen", w "Probe", i 0x00050045, i 0, i 60000) i .r0'
+  StrCpy $9 0
+  StrCpy $4 0x00050045
+  !if ${MODE} == sysmodal
+    StrCpy $4 0x00051045
+  !endif
+  !if ${MODE} == owner
+    ; unsichtbares Besitzerfenster „immer im Vordergrund“ (WS_EX_TOPMOST|WS_EX_TOOLWINDOW, WS_POPUP)
+    System::Call 'user32::CreateWindowExW(i 0x88, w "STATIC", w "", i 0x80000000, i 0, i 0, i 0, i 0, p 0, p 0, p 0, p 0) p .r9'
+  !endif
+  System::Call 'user32::MessageBoxTimeoutW(p r9, w "Probe ${MODE}: wird von Microsoft heruntergeladen", w "Probe", i r4, i 0, i 60000) i .r0'
+  !if ${MODE} == owner
+    System::Call 'user32::DestroyWindow(p r9)'
+  !endif
   !if ${MODE} == attach
     System::Call 'user32::AttachThreadInput(i r7, i r6, i 0)'
   !endif
