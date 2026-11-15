@@ -1,0 +1,17 @@
+# Vorübergehend (Issue 11): Probe, welche Box nach dem Banner „immer im Vordergrund“ bleibt. Wird vor dem Merge entfernt.
+name: Probe
+on: pull_request
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - shell: pwsh
+        run: |
+          choco install nsis -y --no-progress | Out-Null
+          $mk = @("${env:ProgramFiles(x86)}\NSIS\makensis.exe", "$env:ProgramFiles\NSIS\makensis.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
+          foreach ($m in 'base', 'destroy', 'keep', 'attach') { & $mk /V1 /INPUTCHARSET UTF8 "/DMODE=$m" "/DOUT=$PWD\probe\probe-$m.exe" probe\probe.nsi; if ($LASTEXITCODE) { throw "makensis $m" } }
+          ./probe/probe.ps1
+          exit 0
