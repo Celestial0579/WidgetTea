@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.IO;
 using System.Net;
 using System.Net.Http;
+using System.Net.Security;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -142,5 +144,24 @@ public class GiteaClientTests
 
         await Assert.ThrowsAsync<HttpRequestException>(
             () => GiteaClient.FetchHeatmapAsync(Settings, "geheim", handler, CancellationToken.None));
+    }
+    // ---- „Zertifikatsfehler ignorieren (nur interne CA)“ (Issue 33)
+
+    [Theory]
+    [InlineData(SslPolicyErrors.None, new X509ChainStatusFlags[0], true)]
+    [InlineData(SslPolicyErrors.RemoteCertificateChainErrors, new[] { X509ChainStatusFlags.UntrustedRoot }, true)]
+    [InlineData(SslPolicyErrors.RemoteCertificateChainErrors, new[] { X509ChainStatusFlags.PartialChain }, true)]
+    [InlineData(SslPolicyErrors.RemoteCertificateChainErrors, new[] { X509ChainStatusFlags.UntrustedRoot, X509ChainStatusFlags.RevocationStatusUnknown, X509ChainStatusFlags.OfflineRevocation }, true)]
+    [InlineData(SslPolicyErrors.RemoteCertificateNameMismatch, new X509ChainStatusFlags[0], false)]
+    [InlineData(SslPolicyErrors.RemoteCertificateNameMismatch | SslPolicyErrors.RemoteCertificateChainErrors, new[] { X509ChainStatusFlags.UntrustedRoot }, false)]
+    [InlineData(SslPolicyErrors.RemoteCertificateNotAvailable, new X509ChainStatusFlags[0], false)]
+    [InlineData(SslPolicyErrors.RemoteCertificateChainErrors, new[] { X509ChainStatusFlags.UntrustedRoot, X509ChainStatusFlags.NotTimeValid }, false)]
+    [InlineData(SslPolicyErrors.RemoteCertificateChainErrors, new[] { X509ChainStatusFlags.Revoked }, false)]
+    [InlineData(SslPolicyErrors.RemoteCertificateChainErrors, new[] { X509ChainStatusFlags.NotSignatureValid }, false)]
+    [InlineData(SslPolicyErrors.RemoteCertificateChainErrors, new[] { X509ChainStatusFlags.NotValidForUsage }, false)]
+    [InlineData(SslPolicyErrors.RemoteCertificateChainErrors, new X509ChainStatusFlags[0], false)]
+    public void Mit_interner_CA_gilt_nur_die_fremde_Wurzel_als_Fehler(SslPolicyErrors errors, X509ChainStatusFlags[] chain, bool accepted)
+    {
+        Assert.Equal(accepted, GiteaClient.AcceptsWithInternalCa(errors, chain));
     }
 }
