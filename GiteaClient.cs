@@ -1,9 +1,12 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Net.Security;
+using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -32,8 +35,26 @@ public static class GiteaClient
     {
         using var handler = new HttpClientHandler();
         if (settings.IgnoreCertificateErrors)
-            handler.ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator;
+            handler.ServerCertificateCustomValidationCallback = (_, _, chain, errors) =>
+                AcceptsWithInternalCa(errors, chain?.ChainStatus.Select(s => s.Status) ?? []);
         return await FetchHeatmapAsync(settings, token, handler, ct);
+    }
+
+    /// <summary>
+    /// „Zertifikatsfehler ignorieren (nur interne CA)“: Nachgesehen wird nur, dass Windows der ausstellenden CA nicht
+    /// vertraut. Der Name muss trotzdem zur Adresse passen, und das Zertifikat muss gültig sein (Zeitraum, Signatur,
+    /// Verwendungszweck, nicht gesperrt). Bis 1.1.1 galt hier jedes Zertifikat (Issue 33).
+    /// </summary>
+    internal static bool AcceptsWithInternalCa(SslPolicyErrors errors, IEnumerable<X509ChainStatusFlags> chainStatus)
+    {
+        if (errors == SslPolicyErrors.None)
+            return true;
+        if (errors != SslPolicyErrors.RemoteCertificateChainErrors)
+            return false;   // Name passt nicht, oder es kam gar kein Zertifikat
+        const X509ChainStatusFlags tolerated = X509ChainStatusFlags.UntrustedRoot | X509ChainStatusFlags.PartialChain
+            | X509ChainStatusFlags.RevocationStatusUnknown | X509ChainStatusFlags.OfflineRevocation;
+        var all = chainStatus.Aggregate(X509ChainStatusFlags.NoError, (a, b) => a | b);
+        return all != X509ChainStatusFlags.NoError && (all & ~tolerated) == X509ChainStatusFlags.NoError;
     }
 
     /// <summary>Dasselbe über einen vorgegebenen Transport, damit sich die Auswertung der Antwort prüfen lässt.</summary>
