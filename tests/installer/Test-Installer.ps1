@@ -38,6 +38,8 @@
        ist dabei „immer im Vordergrund“ und bleibt sichtbar, wenn ein anderes Programm davor aufgeht. Beim
        Selbst-Update ohne winget gilt das auch für den Hinweis, der nach dem Zeitablauf von „Wiederholen/Abbrechen“
        kommt.
+   15  Ein Installationsordner außerhalb des Benutzerprofils erbt keine Rechte mehr: Zugriff haben nur der Benutzer,
+       SYSTEM und die Administratoren, auch auf Dateien, die schon darin lagen. Im Profil bleibt alles wie bisher.
 
   Für 3, 4, 6 und 8 wird das Setup ein zweites Mal gebaut, mit einer Mindestversion der Laufzeit, die es nicht
   gibt (/DDOTNET_MINPATCH=999), und mit kurzem Zeitablauf der Nachfrage. So lässt sich „Laufzeit fehlt“ auf
@@ -1021,6 +1023,47 @@ Check-RetryFront -Cover -What 'Der Hinweis nach dem Zeitablauf'
 Check ((Get-AutoUpdate) -eq $false) 'Automatische Updates sind ausgesetzt'
 Write-Settings $settingsOriginal
 Remove-Item -LiteralPath (Join-Path $settingsDir 'autoupdate-paused') -Force -ErrorAction SilentlyContinue
+Start-Process -FilePath (Join-Path $target 'uninstall.exe') -ArgumentList '/S' -Wait
+Wait-Gone $target
+Check (-not (Test-Path $target)) 'Die Deinstallation entfernt den Ordner'
+
+# ---------------------------------------------------------------- 15 Rechte des Installationsordners
+
+Step '15 Installationsordner außerhalb des Benutzerprofils: Zugriff nur für den Benutzer'
+# Issue 34. Der Arbeitsordner der CI liegt nicht im Benutzerprofil; ein Ordner darin erbt dessen Rechte, wie
+# C:\WidgetTea die der Laufwerkswurzel. Ein Unterordner mit einer Datei liegt schon da, wie Reste eines anderen.
+function Get-Sids([string]$Path) {
+    @((Get-Acl -LiteralPath $Path).Access | ForEach-Object {
+        try { $_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value } catch { "$($_.IdentityReference)" }
+    } | Sort-Object -Unique)
+}
+$me = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+$allowed = @($me, 'S-1-5-18', 'S-1-5-32-544')
+$target = Join-Path $work 'rechte'
+New-Item -ItemType Directory -Force (Join-Path $target 'vorher') | Out-Null
+Set-Content -LiteralPath (Join-Path $target 'vorher\alt.txt') -Value 'lag schon da'
+$fileAcl = Get-Acl -LiteralPath (Join-Path $target 'vorher\alt.txt')
+$fileAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule((New-Object System.Security.Principal.SecurityIdentifier('S-1-1-0')), 'Modify', 'Allow')))
+Set-Acl -LiteralPath (Join-Path $target 'vorher\alt.txt') -AclObject $fileAcl
+Check (-not (Get-Acl -LiteralPath $target).AreAccessRulesProtected) 'Ausgangslage: Der Ordner erbt die Rechte seines Elternordners'
+$r = Invoke-Setup $setup @('/S', "/D=$target")
+Check ($r.ExitCode -eq 0) "Exitcode 0 (war $($r.ExitCode))"
+Check (Get-Acl -LiteralPath $target).AreAccessRulesProtected 'Der Installationsordner erbt keine Rechte mehr'
+$sids = Get-Sids $target
+Check ($sids -contains $me) 'Der Benutzer hat Zugriff'
+Check (-not ($sids | Where-Object { $_ -notin $allowed })) "Sonst nur SYSTEM und die Administratoren ($($sids -join ', '))"
+foreach ($file in 'WidgetTea.exe', 'vorher\alt.txt') {
+    $fileSids = Get-Sids (Join-Path $target $file)
+    Check (-not ($fileSids | Where-Object { $_ -notin $allowed })) "$file erbt nur diese Rechte ($($fileSids -join ', '))"
+}
+Start-Process -FilePath (Join-Path $target 'uninstall.exe') -ArgumentList '/S' -Wait
+Remove-Item -LiteralPath $target -Recurse -Force -ErrorAction SilentlyContinue
+
+# Im Benutzerprofil bleibt es bei den geerbten Rechten.
+$target = Join-Path $env:LOCALAPPDATA 'Programs\WidgetTea-Rechtepruefung'
+$r = Invoke-Setup $setup @('/S', "/D=$target")
+Check ($r.ExitCode -eq 0) "Exitcode 0 (war $($r.ExitCode))"
+Check (-not (Get-Acl -LiteralPath $target).AreAccessRulesProtected) 'Im Benutzerprofil erbt der Ordner seine Rechte wie bisher'
 Start-Process -FilePath (Join-Path $target 'uninstall.exe') -ArgumentList '/S' -Wait
 Wait-Gone $target
 Check (-not (Test-Path $target)) 'Die Deinstallation entfernt den Ordner'
