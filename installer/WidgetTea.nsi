@@ -567,6 +567,53 @@ FunctionEnd
 
 ; Außerhalb des Profils: Vererbung aus, Vollzugriff nur für den Benutzer, SYSTEM und die Administratoren; was
 ; schon im Ordner liegt, übernimmt diese Rechte. Gelingt das nicht, wird nicht installiert.
+; Der Benutzer geht per SID an icacls, nicht als %USERDOMAIN%\%USERNAME%: In manchen Sitzungen (etwa über SSH) steht
+; in USERDOMAIN „WORKGROUP“, und icacls kennt das Konto dann nicht (Issue 47). Ergebnis in $R2, leer bei Fehler.
+Function CurrentUserSid
+  Push $R0
+  Push $R1
+  Push $R3
+  Push $R4
+  StrCpy $R2 ""
+  nsExec::ExecToStack '"$SYSDIR\whoami.exe" /user /fo csv /nh'
+  Pop $R0                           ; Exitcode
+  Pop $R1                           ; "domäne\benutzer","S-1-5-21-…"
+  ${If} $R0 == 0
+    ${Do}                           ; Zeilenende und schließendes Anführungszeichen abschneiden
+      StrCpy $R3 $R1 1 -1
+      ${If} $R3 == "$\r"
+      ${OrIf} $R3 == "$\n"
+      ${OrIf} $R3 == " "
+      ${OrIf} $R3 == '"'
+        StrCpy $R1 $R1 -1
+      ${Else}
+        ${Break}
+      ${EndIf}
+    ${Loop}
+    StrLen $R4 $R1                  ; das letzte Feld beginnt hinter dem letzten Anführungszeichen
+    ${Do}
+      IntOp $R4 $R4 - 1
+      ${If} $R4 < 0
+        ${Break}
+      ${EndIf}
+      StrCpy $R3 $R1 1 $R4
+      ${If} $R3 == '"'
+        ${Break}
+      ${EndIf}
+    ${Loop}
+    IntOp $R4 $R4 + 1
+    StrCpy $R1 $R1 "" $R4
+    StrCpy $R3 $R1 4
+    ${If} $R3 == "S-1-"
+      StrCpy $R2 $R1
+    ${EndIf}
+  ${EndIf}
+  Pop $R4
+  Pop $R3
+  Pop $R1
+  Pop $R0
+FunctionEnd
+
 Function SecureInstDir
   Push $R0
   Push $R1
@@ -574,11 +621,13 @@ Function SecureInstDir
   Call IsOutsideProfile
   ${If} $R0 == 1
     CreateDirectory "$INSTDIR"
-    ReadEnvStr $R1 USERDOMAIN
-    ReadEnvStr $R2 USERNAME
-    nsExec::ExecToStack '"$SYSDIR\icacls.exe" "$INSTDIR" /inheritance:r /grant:r "$R1\$R2:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F"'
-    Pop $R0                         ; Exitcode
-    Pop $R1                         ; Ausgabe
+    Call CurrentUserSid
+    StrCpy $R0 1                    ; ohne SID gilt es als gescheitert
+    ${If} $R2 != ""
+      nsExec::ExecToStack '"$SYSDIR\icacls.exe" "$INSTDIR" /inheritance:r /grant:r "*$R2:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F"'
+      Pop $R0                       ; Exitcode
+      Pop $R1                       ; Ausgabe
+    ${EndIf}
     ${If} $R0 != 0
       MessageBox MB_OK|MB_ICONSTOP "Die Rechte des Installationsordners ließen sich nicht auf dich beschränken:$\r$\n$INSTDIR$\r$\n$\r$\nBitte einen Ordner im eigenen Benutzerprofil wählen." /SD IDOK
       Pop $R2
