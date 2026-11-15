@@ -114,7 +114,7 @@ Verlangt eine neue Fassung eine neuere .NET-Laufzeit, `DOTNET_MINPATCH` in `inst
 ### Tests
 
 ```powershell
-dotnet test tests\WidgetTea.Tests\WidgetTea.Tests.csproj   # Unit-Tests des Updaters
+dotnet test --project tests\WidgetTea.Tests\WidgetTea.Tests.csproj   # Unit-Tests (Microsoft.Testing.Platform, siehe global.json)
 .\tests\release\Test-ReleaseChecks.ps1                     # Sperre von release.ps1 -Publish
 ```
 
