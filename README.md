@@ -24,15 +24,18 @@ Auf einem ARM64-Windows läuft WidgetTea in der x64-Emulation und braucht auch d
 Ist die Umgebungsvariable `DOTNET_ROOT` gesetzt und zeigt sie auf die ARM64-Laufzeit, startet WidgetTea nicht.
 Abhilfe: `DOTNET_ROOT_X64` auf `C:\Program Files\dotnet\x64` setzen.
 
-Das Setup ist nicht signiert. Windows meldet beim Start deshalb „Der Computer wurde durch Windows geschützt“; über
-„Weitere Informationen“ und „Trotzdem ausführen“ geht es weiter. Wer vorher sichergehen will, vergleicht die Prüfsumme
-der geladenen Datei mit der Datei `…-setup.exe.sha256` aus demselben Release (Groß- und Kleinschreibung spielt keine Rolle):
+Das Setup ist vorerst nicht signiert. Windows meldet beim Start deshalb „Der Computer wurde durch Windows geschützt“;
+über „Weitere Informationen“ und „Trotzdem ausführen“ geht es weiter. Ob die Datei vollständig und unverändert
+angekommen ist, zeigt der Vergleich mit der Prüfsumme in `…-setup.exe.sha256` aus demselben Release (Groß- und
+Kleinschreibung spielt keine Rolle):
 
 ```powershell
 (Get-FileHash .\WidgetTea-<version>-setup.exe -Algorithm SHA256).Hash
 ```
 
-Was eine Signatur über die SignPath Foundation verlangt und was dafür vorbereitet ist, steht in [docs/signpath.md](docs/signpath.md).
+Gegen ein ausgetauschtes Release schützt die Prüfsumme nicht: Wer dort die Setup-Datei ersetzen kann, kann auch die
+Prüfsumme anpassen. Das leistete erst eine Signatur. Geprüft wird, WidgetTea künftig auch über den Microsoft Store
+anzubieten. Welche Wege es zu einer Signatur gibt, steht in [docs/signatur.md](docs/signatur.md).
 
 Wer die Nachfrage ablehnt, behält die bisherige Version: Geprüft wird, bevor das Setup irgendetwas anfasst.
 Nach einem abgelehnten Selbst-Update schaltet das Setup „Updates automatisch installieren“ aus, weil WidgetTea
