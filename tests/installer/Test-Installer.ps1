@@ -35,7 +35,9 @@
    14  „Ja" auf die Nachfrage nach der Laufzeit: ohne winget führt der Weg zu „Wiederholen/Abbrechen", das im
        stillen Modus nicht ewig wartet; mit winget ruft das Setup es auf, und scheitert die Installation
        (Paket, das es nicht gibt), geht es ebenfalls dorthin – auch von Hand gestartet. „Wiederholen/Abbrechen“
-       ist dabei „immer im Vordergrund“ und bleibt sichtbar, wenn ein anderes Programm davor aufgeht.
+       ist dabei „immer im Vordergrund“ und bleibt sichtbar, wenn ein anderes Programm davor aufgeht. Beim
+       Selbst-Update ohne winget gilt das auch für den Hinweis, der nach dem Zeitablauf von „Wiederholen/Abbrechen“
+       kommt.
 
   Für 3, 4, 6 und 8 wird das Setup ein zweites Mal gebaut, mit einer Mindestversion der Laufzeit, die es nicht
   gibt (/DDOTNET_MINPATCH=999), und mit kurzem Zeitablauf der Nachfrage. So lässt sich „Laufzeit fehlt“ auf
@@ -907,7 +909,7 @@ $nowhere = Join-Path $work 'nirgends'
 # Geprüft wird, solange es offen ist: „immer im Vordergrund“ und, wenn $Cover, auch dann noch zuoberst, wenn ein
 # anderes Programm maximiert davor aufgeht (hier der Editor statt des Browsers).
 $script:front = $null
-function Test-RetryFront([switch]$Cover) {
+function Test-RetryFront([switch]$Cover, [string[]]$Answer = @('Cancel', 'Abbrechen')) {
     # $h ist das Fenster, das Invoke-Setup gerade beantwortet (der Skriptblock läuft in dessen Bereich)
     $result = [ordered]@{ Topmost = [WtDialogs]::IsTopmost($h); Covered = $false; Visible = $null }
     if ($Cover) {
@@ -923,14 +925,14 @@ function Test-RetryFront([switch]$Cover) {
         Get-Process -Name 'notepad' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     }
     $script:front = [pscustomobject]$result
-    @('Cancel', 'Abbrechen')
+    $Answer
 }
-function Check-RetryFront([switch]$Cover) {
-    Check ($null -ne $script:front) '„Wiederholen/Abbrechen“ wurde geprüft, solange es offen war'
-    Check $script:front.Topmost '„Wiederholen/Abbrechen“ ist „immer im Vordergrund“'
+function Check-RetryFront([switch]$Cover, [string]$What = '„Wiederholen/Abbrechen“') {
+    Check ($null -ne $script:front) "$What wurde geprüft, solange es offen war"
+    Check $script:front.Topmost "$What ist immer im Vordergrund"
     if ($Cover) {
         Check $script:front.Covered 'Der Editor ging maximiert auf'
-        Check $script:front.Visible '„Wiederholen/Abbrechen“ bleibt sichtbar, wenn ein anderes Programm maximiert davor aufgeht'
+        Check $script:front.Visible "$What bleibt sichtbar, wenn ein anderes Programm maximiert davor aufgeht"
     }
     $script:front = $null
 }
@@ -989,5 +991,29 @@ if (Test-Path -LiteralPath (Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\w
 } else {
     Note 'winget fehlt auf diesem Rechner, der Aufruf über winget ist hier nicht zu prüfen'
 }
+
+# e) Selbst-Update auf einem Rechner ohne winget, „Wiederholen/Abbrechen“ bleibt unbeantwortet (Issue 30): Nach dem
+#    Zeitablauf startet die alte Version wieder, und der Hinweis dazu muss vor anderen Fenstern liegen. In der
+#    Test-VM lag er hinter dem Browser.
+$target = Join-Path $work 'ohne-winget'
+$r = Invoke-Setup $setup @('/S', "/D=$target")
+Check ($r.ExitCode -eq 0) "Exitcode 0 (war $($r.ExitCode))"
+Write-Settings $settingsOriginal
+$hint = 'Auf die Nachfrage kam keine Antwort'
+$r = Invoke-Setup $setupNoWinget @('/S', '/RESTART', "/D=$target") ([ordered]@{
+    $ask   = @('Yes', 'Ja')
+    $retry = @()
+    $hint  = { Test-RetryFront -Cover -Answer @('OK') }
+}) -TimeoutSec 180
+Stop-App
+Check ($r.ExitCode -eq 3) "Exitcode 3 (war $($r.ExitCode))"
+Check ($r.Seen -contains $hint) 'Nach dem Zeitablauf von „Wiederholen/Abbrechen" kam der Hinweis'
+Check-RetryFront -Cover -What 'Der Hinweis nach dem Zeitablauf'
+Check ((Get-AutoUpdate) -eq $false) 'Automatische Updates sind ausgesetzt'
+Write-Settings $settingsOriginal
+Remove-Item -LiteralPath (Join-Path $settingsDir 'autoupdate-paused') -Force -ErrorAction SilentlyContinue
+Start-Process -FilePath (Join-Path $target 'uninstall.exe') -ArgumentList '/S' -Wait
+Wait-Gone $target
+Check (-not (Test-Path $target)) 'Die Deinstallation entfernt den Ordner'
 
 Write-Host "`nAlle Installer-Prüfungen bestanden." -ForegroundColor Green
