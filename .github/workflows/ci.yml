@@ -45,7 +45,7 @@ jobs:
           dotnet-version: '10.0.x'
 
       - name: Tests
-        run: dotnet test tests/WidgetTea.Tests/WidgetTea.Tests.csproj -c Release
+        run: dotnet test --project tests/WidgetTea.Tests/WidgetTea.Tests.csproj -c Release
 
       - name: Release-Prüfungen
         shell: pwsh

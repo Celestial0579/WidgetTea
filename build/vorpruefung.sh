@@ -41,6 +41,17 @@ else
 			grep -E 'error|warning' <<<"$log" | sed 's/^/       /' | sort -u | head -30
 		fi
 	done
+	# dotnet test bis zum Start des Testhosts: Fehler im Aufbau (etwa ein Testrunner, den das SDK nicht mehr
+	# unterstützt) fallen so schon hier auf. Die Tests selbst laufen nur unter Windows; dass der Start an der
+	# fehlenden Windows Desktop Runtime scheitert, ist hier erwartet.
+	if log=$("$DOTNET" test --project tests/WidgetTea.Tests/WidgetTea.Tests.csproj -c Release -p:EnableWindowsTargeting=true 2>&1); then
+		gut "dotnet test (Tests liefen)"
+	elif grep -q 'Microsoft.WindowsDesktop.App' <<<"$log" && ! grep -qE ' error |: error ' <<<"$log"; then
+		gut "dotnet test bis zum Start des Testhosts (die Tests selbst brauchen Windows)"
+	else
+		schlecht "dotnet test"
+		grep -E 'error|Fehler' <<<"$log" | sed 's/^/       /' | sort -u | head -20
+	fi
 	# Der Build-Server hält sonst Arbeitsspeicher fest.
 	"$DOTNET" build-server shutdown >/dev/null 2>&1 || true
 fi
