@@ -1065,7 +1065,10 @@ $fileAcl = Get-Acl -LiteralPath (Join-Path $target 'vorher\alt.txt')
 $fileAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule((New-Object System.Security.Principal.SecurityIdentifier('S-1-1-0')), 'Modify', 'Allow')))
 Set-Acl -LiteralPath (Join-Path $target 'vorher\alt.txt') -AclObject $fileAcl
 Check (-not (Get-Acl -LiteralPath $target).AreAccessRulesProtected) 'Ausgangslage: Der Ordner erbt die Rechte seines Elternordners'
-$r = Invoke-Setup $setup @('/S', "/D=$target")
+# Wie in einer SSH-Sitzung steht in USERDOMAIN nicht der Rechnername (Issue 47). Das Setup erbt die Umgebung.
+$savedDomain = $env:USERDOMAIN
+$env:USERDOMAIN = 'WORKGROUP'
+try { $r = Invoke-Setup $setup @('/S', "/D=$target") } finally { $env:USERDOMAIN = $savedDomain }
 Check ($r.ExitCode -eq 0) "Exitcode 0 (war $($r.ExitCode))"
 Check (Get-Acl -LiteralPath $target).AreAccessRulesProtected 'Der Installationsordner erbt keine Rechte mehr'
 $sids = Get-Sids $target
