@@ -10,9 +10,15 @@
     <AssemblyName>WidgetTea</AssemblyName>
     <RootNamespace>WidgetTea</RootNamespace>
     <ApplicationIcon>Assets\WidgetTea.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- WFO0003 will die DPI-Angabe über die WinForms-API statt im Manifest. Die App ist aber WPF (WinForms nur für das
+         Tray-Symbol), und WPF richtet sich nach dem Manifest. -->
+    <NoWarn>$(NoWarn);WFO0003</NoWarn>
 
-    <Version>1.1.2</Version>
+    <Version>1.1.3</Version>
     <Product>WidgetTea</Product>
+    <!-- Erscheint als „Dateibeschreibung“ in den Eigenschaften der EXE und im Task-Manager. -->
+    <AssemblyTitle>WidgetTea – Gitea-Contributions auf dem Desktop</AssemblyTitle>
     <Authors>Tim Heyne</Authors>
     <Company>Celestial0579</Company>
     <Copyright>Copyright © 2026 Tim Heyne – MIT-Lizenz</Copyright>

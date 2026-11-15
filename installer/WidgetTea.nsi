@@ -20,6 +20,12 @@ ManifestDPIAware true
 SetCompressor /SOLID lzma
 RequestExecutionLevel user
 
+; Ab NSIS 3.04 lädt das Setup Systembibliotheken nur aus System32: Ein Setup im Download-Ordner zieht keine
+; fremden DLLs nach, die dort zufällig liegen (Issue 43, A5). Ein älteres NSIS baut deshalb nicht.
+!if ${NSIS_PACKEDVERSION} < 0x03004000
+  !error "WidgetTea braucht NSIS 3.04 oder neuer (gefunden: ${NSIS_VERSION})."
+!endif
+
 !ifndef VERSION
   !error "VERSION fehlt (/DVERSION=x.y.z)"
 !endif
@@ -53,7 +59,12 @@ RequestExecutionLevel user
 !define PUBLISHER   "Celestial0579"
 !define EXENAME     "WidgetTea.exe"
 !define UNINSTKEY   "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}"
-!define SETTINGSKEY "Software\${APPNAME}"
+; Eigene Einträge unter dem Herstellerschlüssel, wie unter Windows üblich (Software\<Hersteller>\<Produkt>).
+; Bis 1.1.2 lag der Installationsort direkt unter Software\WidgetTea; das Setup zieht ihn um (.onInit, SecMain).
+!define VENDORKEY   "Software\${PUBLISHER}"
+!define SETTINGSKEY "${VENDORKEY}\${APPNAME}"
+!define OLDSETTINGSKEY "Software\${APPNAME}"
+!define STARTUPAPPROVEDKEY "Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run"
 !define RUNKEY      "Software\Microsoft\Windows\CurrentVersion\Run"
 !define PRODUCT     "${APPNAME}"
 
@@ -476,9 +487,25 @@ Function .onInit
     StrCpy $Restart 1
   ${EndIf}
 
+  ; Installiert von einer Fassung bis 1.1.2: Deren Installationsort steht noch unter dem alten Schlüssel. Ohne
+  ; ihn landete das Update (der Updater ruft ohne /D= auf) in der Vorgabe statt im bisherigen Ordner.
+  ClearErrors
+  ReadRegStr $R1 HKCU "${SETTINGSKEY}" "InstallDir"
+  ${If} $R1 == ""
+    ReadRegStr $R1 HKCU "${OLDSETTINGSKEY}" "InstallDir"
+    ClearErrors
+    ${GetOptions} $R0 "/D=" $R2
+    ${If} ${Errors}                 ; kein /D= auf der Befehlszeile: der bisherige Ort gilt
+    ${AndIf} $R1 != ""
+      StrCpy $INSTDIR $R1
+    ${EndIf}
+  ${EndIf}
+
   ; Beim Selbst-Update hat sich die App schon beendet: auch still nachfragen. Bricht der Nutzer ab, schaltet
   ; UpdateDeclined die automatischen Updates aus und startet die alte Version wieder. Bis hierher ist an der
   ; vorhandenen Installation nichts verändert.
+  Call KeepAutostartChoice
+
   StrCpy $DotnetAsk $Restart
   ${If} $Restart == 1
     GetFunctionAddress $DotnetAbortHook UpdateDeclined
@@ -608,6 +635,7 @@ Section "WidgetTea (erforderlich)" SecMain
   WriteRegDWORD HKCU "${UNINSTKEY}" "EstimatedSize" "$0"
 
   WriteRegStr HKCU "${SETTINGSKEY}" "InstallDir" "$INSTDIR"
+  DeleteRegKey HKCU "${OLDSETTINGSKEY}"     ; umgezogen (bis 1.1.2)
 
   ; Hatte ein abgebrochenes Selbst-Update die automatischen Updates ausgeschaltet, sind sie jetzt wieder an.
   Call ResumeAutoUpdate
@@ -619,6 +647,19 @@ Section "Mit Windows starten" SecAutostart
     WriteRegStr HKCU "${RUNKEY}" "${APPNAME}" '"$INSTDIR\${EXENAME}"'
   ${EndIf}
 SectionEnd
+
+; Ist WidgetTea schon installiert und der Autostart aus (im Einstellungsfenster abgeschaltet), bleibt er auch bei
+; einem Update von Hand aus: „Mit Windows starten“ ist dann nicht vorausgewählt (Issue 43, B9). Beim Selbst-Update
+; schreibt die Sektion ohnehin nichts.
+Function KeepAutostartChoice
+  ${If} ${FileExists} "$INSTDIR\${EXENAME}"
+    ClearErrors
+    ReadRegStr $R1 HKCU "${RUNKEY}" "${APPNAME}"
+    ${If} ${Errors}
+      SectionSetFlags ${SecAutostart} 0
+    ${EndIf}
+  ${EndIf}
+FunctionEnd
 
 !insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
   !insertmacro MUI_DESCRIPTION_TEXT ${SecMain} "Das Widget (benötigt die .NET Desktop Runtime ${DOTNET_MAJOR})."
@@ -644,7 +685,11 @@ Section "un.WidgetTea" SecUnMain
 
   DeleteRegKey HKCU "${UNINSTKEY}"
   DeleteRegKey HKCU "${SETTINGSKEY}"
+  DeleteRegKey /ifempty HKCU "${VENDORKEY}"
+  DeleteRegKey HKCU "${OLDSETTINGSKEY}"     ; falls von einer Fassung bis 1.1.2 noch da
   DeleteRegValue HKCU "${RUNKEY}" "${APPNAME}"
+  ; Hat jemand den Autostart im Task-Manager abgeschaltet, merkt sich Windows das hier.
+  DeleteRegValue HKCU "${STARTUPAPPROVEDKEY}" "${APPNAME}"
 SectionEnd
 
 Section /o "un.Benutzerdaten entfernen" SecUnData

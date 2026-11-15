@@ -40,6 +40,8 @@
        kommt.
    15  Ein Installationsordner außerhalb des Benutzerprofils erbt keine Rechte mehr: Zugriff haben nur der Benutzer,
        SYSTEM und die Administratoren, auch auf Dateien, die schon darin lagen. Im Profil bleibt alles wie bisher.
+   16  Installation, Start und Deinstallation in einem Ordner mit Leerzeichen, Umlauten und langem Namen; ein
+       abgeschalteter Autostart bleibt aus, wenn man das Setup von Hand noch einmal ausführt.
 
   Für 3, 4, 6 und 8 wird das Setup ein zweites Mal gebaut, mit einer Mindestversion der Laufzeit, die es nicht
   gibt (/DDOTNET_MINPATCH=999), und mit kurzem Zeitablauf der Nachfrage. So lässt sich „Laufzeit fehlt“ auf
@@ -71,14 +73,17 @@ $logs = Join-Path $root 'artifacts\test-logs'
 $work = Join-Path $(if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { $env:TEMP }) 'widgettea-installertest'
 $settingsDir = Join-Path $env:LOCALAPPDATA 'WidgetTea'
 $settingsFile = Join-Path $settingsDir 'settings.json'
-$regKey = 'HKCU:\Software\WidgetTea'
+$regKey = 'HKCU:\Software\Celestial0579\WidgetTea'   # seit 1.1.3 unter dem Herstellerschlüssel
+$oldRegKey = 'HKCU:\Software\WidgetTea'             # bis 1.1.2
+$vendorKey = 'HKCU:\Software\Celestial0579'
+$startupApprovedKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run'
 $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
 $oldVersion = '1.0.0'
 $askTimeout = 10   # Sekunden, die die Nachfrage der Testfassung auf eine Antwort wartet (im echten Setup 120)
 $oldSetupUrl = "https://github.com/Celestial0579/WidgetTea/releases/download/v$oldVersion/WidgetTea-$oldVersion-setup.exe"
 
 if (-not (Test-Path $setup)) { throw "Setup fehlt: $setup – erst build\release.ps1 laufen lassen." }
-if ((Test-Path $regKey) -and -not $Force) { throw "WidgetTea ist auf diesem Rechner schon installiert ($regKey). Abbruch." }
+if (((Test-Path $regKey) -or (Test-Path $oldRegKey)) -and -not $Force) { throw "WidgetTea ist auf diesem Rechner schon installiert ($regKey oder $oldRegKey). Abbruch." }
 
 Remove-Item -Recurse -Force $work, $logs -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $work, $logs | Out-Null
@@ -347,11 +352,19 @@ Check ((Get-Item (Join-Path $fresh 'WidgetTea.exe')).VersionInfo.ProductVersion 
 $runtime = Get-RuntimeOfApp (Join-Path $fresh 'WidgetTea.exe') 'neuinstallation'
 Check ($runtime -match '\\shared\\Microsoft\.NETCore\.App\\10\.0\.\d+\\coreclr\.dll$') 'Die App startet mit der installierten Laufzeit'
 
+Check (-not (Test-Path $oldRegKey)) 'Unter dem alten Schlüssel ohne Hersteller steht nichts'
+
+# So sieht es aus, wenn jemand den Autostart im Task-Manager abgeschaltet hat: Windows legt dafür einen Wert an.
+if (-not (Test-Path $startupApprovedKey)) { New-Item -Path $startupApprovedKey -Force | Out-Null }
+New-ItemProperty -Path $startupApprovedKey -Name 'WidgetTea' -PropertyType Binary -Value ([byte[]](3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)) -Force | Out-Null
+
 Start-Process -FilePath (Join-Path $fresh 'uninstall.exe') -ArgumentList '/S' -Wait
 $deadline = (Get-Date).AddSeconds(60)
 while ((Test-Path $fresh) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 500 }
 Check (-not (Test-Path $fresh)) 'Deinstallation entfernt den Ordner'
 Check (-not (Test-Path $regKey)) 'Deinstallation entfernt die Registry-Einträge'
+Check (-not (Test-Path $vendorKey)) 'Der leere Herstellerschlüssel ist auch weg'
+Check (-not (Get-ItemProperty -Path $startupApprovedKey -Name 'WidgetTea' -ErrorAction SilentlyContinue)) 'Deinstallation entfernt den Vermerk des Task-Managers zum Autostart'
 Check (-not (Get-ItemProperty -Path $runKey -Name 'WidgetTea' -ErrorAction SilentlyContinue)) 'Deinstallation entfernt den Autostart'
 
 # ---------------------------------------------------------------- 2 Ausgangslage 1.0.0
@@ -367,6 +380,7 @@ $dir = Join-Path $work 'update'
 $r = Invoke-Setup $oldSetup @('/S', "/D=$dir")
 Check ($r.ExitCode -eq 0) "Exitcode 0 (war $($r.ExitCode))"
 Check (Test-Path (Join-Path $dir 'coreclr.dll')) "$oldVersion bringt die .NET-Laufzeit selbst mit"
+Check ((Get-ItemProperty $oldRegKey).InstallDir -eq $dir) "$oldVersion vermerkt den Installationsort unter dem alten Schlüssel"
 Write-Host "       $((Get-ChildItem $dir -Recurse -File).Count) Dateien, $((Get-ChildItem $dir -Directory).Count) Unterordner"
 
 # Beim Update entfernt das Setup genau die Dateien von $oldVersion (installer\Bundled-1.0.0.nsh). Die Liste dort muss
@@ -471,6 +485,9 @@ Check (Test-Path (Join-Path $dir 'meine-notizen.txt')) 'Die fremde Datei im Haup
 Check (Test-Path (Join-Path $dir 'eigene-bibliothek.dll')) 'Die fremde DLL im Hauptordner ist noch da'
 Check (Test-SameSnapshot $foreignBefore (Get-Snapshot (Join-Path $dir 'eigener-ordner'))) 'Der fremde Unterordner ist unverändert'
 Check ((Get-Item (Join-Path $dir 'WidgetTea.exe')).VersionInfo.ProductVersion -like "$version*") "Installiert ist Version $version"
+# Der Updater ruft ohne /D= auf: Das Setup fand den Ordner unter dem alten Schlüssel und zieht den Eintrag um.
+Check ((Get-ItemProperty $regKey -ErrorAction SilentlyContinue).InstallDir -eq $dir) 'Der Installationsort steht jetzt unter dem Herstellerschlüssel'
+Check (-not (Test-Path $oldRegKey)) 'Der alte Schlüssel ohne Hersteller ist weg'
 Check ((Read-Settings) -ceq $settingsOriginal) 'Die Einstellungen sind wieder genau wie vorher, automatische Updates an'
 Check (-not (Test-Marker)) 'Der Merker ist gelöscht'
 if ($relaunched) { Ok 'Das Setup hat die neue Version gestartet' } else { Note 'Start durch das Setup hier nicht beobachtet (explorer.exe startet in dieser Sitzung nichts?)' }
@@ -1030,8 +1047,9 @@ Check (-not (Test-Path $target)) 'Die Deinstallation entfernt den Ordner'
 # ---------------------------------------------------------------- 15 Rechte des Installationsordners
 
 Step '15 Installationsordner außerhalb des Benutzerprofils: Zugriff nur für den Benutzer'
-# Issue 34. Der Arbeitsordner der CI liegt nicht im Benutzerprofil; ein Ordner darin erbt dessen Rechte, wie
-# C:\WidgetTea die der Laufwerkswurzel. Ein Unterordner mit einer Datei liegt schon da, wie Reste eines anderen.
+# Issue 34. Ein Ordner unter C:\Users\Public liegt außerhalb jedes Benutzerprofils und erbt Rechte, mit denen alle
+# Benutzer dort schreiben dürfen, wie C:\WidgetTea die der Laufwerkswurzel. (Nicht der Arbeitsordner: Außerhalb
+# der CI liegt der unter %TEMP%, also im Profil.) Ein Unterordner mit einer Datei liegt schon da, wie Reste eines anderen.
 function Get-Sids([string]$Path) {
     @((Get-Acl -LiteralPath $Path).Access | ForEach-Object {
         try { $_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value } catch { "$($_.IdentityReference)" }
@@ -1039,7 +1057,8 @@ function Get-Sids([string]$Path) {
 }
 $me = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $allowed = @($me, 'S-1-5-18', 'S-1-5-32-544')
-$target = Join-Path $work 'rechte'
+$target = Join-Path $env:PUBLIC 'widgettea-rechtepruefung'
+Remove-Item -LiteralPath $target -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force (Join-Path $target 'vorher') | Out-Null
 Set-Content -LiteralPath (Join-Path $target 'vorher\alt.txt') -Value 'lag schon da'
 $fileAcl = Get-Acl -LiteralPath (Join-Path $target 'vorher\alt.txt')
@@ -1067,5 +1086,31 @@ Check (-not (Get-Acl -LiteralPath $target).AreAccessRulesProtected) 'Im Benutzer
 Start-Process -FilePath (Join-Path $target 'uninstall.exe') -ArgumentList '/S' -Wait
 Wait-Gone $target
 Check (-not (Test-Path $target)) 'Die Deinstallation entfernt den Ordner'
+
+# ---------------------------------------------------------------- 16 Ungewöhnliche Pfade, Autostart beim Update von Hand
+
+Step '16 Ordner mit Leerzeichen, Umlauten und langem Namen; ein abgeschalteter Autostart bleibt aus'
+# Issue 43 (C14, B9). Lang, aber unter 260 Zeichen samt Dateinamen: Darüber kämen NSIS und der Starter von .NET
+# ohnehin nicht, und Windows legt solche Ordner ohne Freischaltung langer Pfade gar nicht erst an.
+$target = Join-Path $work ('Ordner mit Leerzeichen – Ümläüte ß & Co\' + ('lang' * 20))
+Write-Host "       Ordner: $target ($($target.Length) Zeichen)"
+$r = Invoke-Setup $setup @('/S', "/D=$target")
+Check ($r.ExitCode -eq 0) "Exitcode 0 (war $($r.ExitCode))"
+Check ((Get-ItemProperty $regKey).InstallDir -eq $target) 'Der Installationsort ist richtig vermerkt'
+Check ((Get-ItemProperty -Path $runKey -Name 'WidgetTea').WidgetTea -eq ('"' + (Join-Path $target 'WidgetTea.exe') + '"')) 'Der Autostart zeigt in Anführungszeichen auf die EXE'
+$runtime = Get-RuntimeOfApp (Join-Path $target 'WidgetTea.exe') 'pfad-mit-umlauten'
+Check ($runtime -match '\\shared\\Microsoft\.NETCore\.App\\10\.0\.\d+\\coreclr\.dll$') 'Die App startet aus diesem Ordner'
+
+# Autostart im Einstellungsfenster abgeschaltet, dann das Setup von Hand (ohne /RESTART) noch einmal: Er bleibt aus.
+Remove-ItemProperty -Path $runKey -Name 'WidgetTea'
+$r = Invoke-Setup $setup @('/S', "/D=$target")
+Check ($r.ExitCode -eq 0) "Exitcode 0 (war $($r.ExitCode))"
+Check (-not (Get-ItemProperty -Path $runKey -Name 'WidgetTea' -ErrorAction SilentlyContinue)) 'Ein abgeschalteter Autostart bleibt beim Update von Hand aus'
+
+Start-Process -FilePath (Join-Path $target 'uninstall.exe') -ArgumentList '/S' -Wait
+Wait-Gone $target
+Check (-not (Test-Path $target)) 'Die Deinstallation entfernt den Ordner'
+Check (-not (Test-Path $regKey)) 'Die Registry-Einträge sind weg'
+Remove-Item -LiteralPath (Join-Path $work 'Ordner mit Leerzeichen – Ümläüte ß & Co') -Recurse -Force -ErrorAction SilentlyContinue
 
 Write-Host "`nAlle Installer-Prüfungen bestanden." -ForegroundColor Green

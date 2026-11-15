@@ -44,12 +44,12 @@ $setup = Join-Path $root "artifacts\$version\WidgetTea-$version-setup.exe"
 $logs = Join-Path $root 'artifacts\test-logs'
 $work = Join-Path $(if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { $env:TEMP }) 'widgettea-arm64'
 $target = Join-Path $work 'installiert'
-$regKey = 'HKCU:\Software\WidgetTea'
+$regKey = 'HKCU:\Software\Celestial0579\WidgetTea'
 $x64Desktop = Join-Path $env:ProgramFiles 'dotnet\x64\shared\Microsoft.WindowsDesktop.App'
 $armDesktop = Join-Path $env:ProgramFiles 'dotnet\shared\Microsoft.WindowsDesktop.App'
 
 if (-not (Test-Path $setup)) { throw "Setup fehlt: $setup – erst build\release.ps1 laufen lassen." }
-if ((Test-Path $regKey) -and -not $Force) { throw "WidgetTea ist auf diesem Rechner schon installiert ($regKey). Abbruch." }
+if (((Test-Path $regKey) -or (Test-Path 'HKCU:\Software\WidgetTea')) -and -not $Force) { throw "WidgetTea ist auf diesem Rechner schon installiert ($regKey). Abbruch." }
 Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $work, $logs | Out-Null
 
