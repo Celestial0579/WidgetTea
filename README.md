@@ -89,6 +89,9 @@ Tray-Menü lässt sich das Update jederzeit von Hand starten.
 Voraussetzungen: .NET 10 SDK, [NSIS](https://nsis.sourceforge.io/) (`winget install NSIS.NSIS`), für Releases die `gh`-CLI.
 Die Skripte laufen unter Windows PowerShell 5.1 und unter PowerShell 7.
 
+Vor einem Push lässt sich unter Linux vorab prüfen, was dort geht: `build/vorpruefung.sh` baut App und Tests mit
+Warnungen als Fehler und parst alle PowerShell-Skripte. Tests ausführen und das Setup bauen geht nur unter Windows.
+
 ```powershell
 .\build\release.ps1            # baut artifacts\<version>\WidgetTea-<version>-setup.exe (+ .sha256)
 .\build\release.ps1 -Publish   # zusätzlich Tag v<version> pushen und GitHub-Release anlegen
