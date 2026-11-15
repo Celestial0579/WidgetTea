@@ -1047,8 +1047,9 @@ Check (-not (Test-Path $target)) 'Die Deinstallation entfernt den Ordner'
 # ---------------------------------------------------------------- 15 Rechte des Installationsordners
 
 Step '15 Installationsordner außerhalb des Benutzerprofils: Zugriff nur für den Benutzer'
-# Issue 34. Der Arbeitsordner der CI liegt nicht im Benutzerprofil; ein Ordner darin erbt dessen Rechte, wie
-# C:\WidgetTea die der Laufwerkswurzel. Ein Unterordner mit einer Datei liegt schon da, wie Reste eines anderen.
+# Issue 34. Ein Ordner unter C:\Users\Public liegt außerhalb jedes Benutzerprofils und erbt Rechte, mit denen alle
+# Benutzer dort schreiben dürfen, wie C:\WidgetTea die der Laufwerkswurzel. (Nicht der Arbeitsordner: Außerhalb
+# der CI liegt der unter %TEMP%, also im Profil.) Ein Unterordner mit einer Datei liegt schon da, wie Reste eines anderen.
 function Get-Sids([string]$Path) {
     @((Get-Acl -LiteralPath $Path).Access | ForEach-Object {
         try { $_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value } catch { "$($_.IdentityReference)" }
@@ -1056,7 +1057,8 @@ function Get-Sids([string]$Path) {
 }
 $me = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $allowed = @($me, 'S-1-5-18', 'S-1-5-32-544')
-$target = Join-Path $work 'rechte'
+$target = Join-Path $env:PUBLIC 'widgettea-rechtepruefung'
+Remove-Item -LiteralPath $target -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force (Join-Path $target 'vorher') | Out-Null
 Set-Content -LiteralPath (Join-Path $target 'vorher\alt.txt') -Value 'lag schon da'
 $fileAcl = Get-Acl -LiteralPath (Join-Path $target 'vorher\alt.txt')
