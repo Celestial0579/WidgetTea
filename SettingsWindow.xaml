@@ -66,7 +66,10 @@
 
         <CheckBox x:Name="AutostartBox" Content="Mit Windows starten"/>
         <CheckBox x:Name="AutoUpdateBox" Content="Updates automatisch installieren"/>
-        <CheckBox x:Name="IgnoreCertBox" Content="Zertifikatsfehler ignorieren (nur interne CA)"/>
+        <CheckBox x:Name="IgnoreCertBox" Content="Zertifikatsfehler ignorieren (nur interne CA)"
+                  Checked="OnIgnoreCertChanged" Unchecked="OnIgnoreCertChanged"/>
+        <TextBlock x:Name="CertWarning" Style="{StaticResource Hint}" Foreground="#D29922" Visibility="Collapsed"
+                   Text="Achtung: Dann gilt jedes Zertifikat mit passendem Namen, auch eines, das nicht von deiner CA stammt. Wer sich im Netz dazwischenschaltet, kann so das Access-Token abfangen."/>
 
         <Border x:Name="ResultBorder" Margin="0,14,0,0" Padding="8,6" CornerRadius="4" Background="#2D2E31" Visibility="Collapsed">
             <TextBlock x:Name="ResultText" TextWrapping="Wrap" FontSize="12"/>

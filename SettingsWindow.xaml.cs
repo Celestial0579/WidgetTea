@@ -151,6 +151,13 @@ public partial class SettingsWindow : Window
         }
     }
 
+    private void OnIgnoreCertChanged(object sender, RoutedEventArgs e)
+    {
+        // Wie beim Hinweis zu http://: Das Ereignis kann kommen, bevor der Hinweis angelegt ist.
+        if (CertWarning is not null)
+            CertWarning.Visibility = IgnoreCertBox.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
+    }
+
     private void OnBaseUrlChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
     {
         // Das Ereignis kann kommen, bevor der Hinweis unter dem Feld angelegt ist.
