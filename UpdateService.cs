@@ -140,7 +140,7 @@ public sealed class UpdateService
             return null;
 
         // Unvollständige Antworten (assets oder name fehlen) gelten als „kein Setup“, nicht als Fehler. Dateien, die
-        // nicht aus den Releases des Update-Repos über https kommen, werden nicht angefasst.
+        // nicht aus den Releases des Update-Repos kommen (Host, Pfad, Schema), werden nicht angefasst.
         var assets = (release.Assets ?? []).OfType<GiteaAsset>()
             .Where(a => a.Name is { Length: > 0 } && IsReleaseDownload(a.BrowserDownloadUrl, repositoryUrl))
             .ToArray();
