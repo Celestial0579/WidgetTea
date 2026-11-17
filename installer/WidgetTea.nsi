@@ -44,7 +44,7 @@ RequestExecutionLevel user
 ; vorausgesetzten Sicherheitskorrekturen; bei neuen kritischen .NET-Patches anheben.
 !define DOTNET_FX       "Microsoft.WindowsDesktop.App"
 !define DOTNET_MAJOR    "10.0"
-!define DOTNET_MINPATCH 14
+!define DOTNET_MINPATCH 15
 !define DOTNET_NAME     ".NET Desktop Runtime"
 !define DOTNET_WINGET   "Microsoft.DotNet.DesktopRuntime.10"
 !define DOTNET_URL      "https://aka.ms/dotnet/10.0/windowsdesktop-runtime-win-x64.exe"
