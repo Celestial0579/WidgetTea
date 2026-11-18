@@ -39,7 +39,8 @@
        Selbst-Update ohne winget gilt das auch für den Hinweis, der nach dem Zeitablauf von „Wiederholen/Abbrechen“
        kommt.
    15  Ein Installationsordner außerhalb des Benutzerprofils erbt keine Rechte mehr: Zugriff haben nur der Benutzer,
-       SYSTEM und die Administratoren, auch auf Dateien, die schon darin lagen. Im Profil bleibt alles wie bisher.
+       SYSTEM und die Administratoren, auch auf Dateien, die schon darin lagen. Ein fremder Eintrag am Ordner selbst
+       fällt weg, und der Ordner samt Inhalt gehört danach dem Benutzer. Im Profil bleibt alles wie bisher.
    16  Installation, Start und Deinstallation in einem Ordner mit Leerzeichen, Umlauten und langem Namen; ein
        abgeschalteter Autostart bleibt aus, wenn man das Setup von Hand noch einmal ausführt.
 
@@ -1064,6 +1065,13 @@ Set-Content -LiteralPath (Join-Path $target 'vorher\alt.txt') -Value 'lag schon 
 $fileAcl = Get-Acl -LiteralPath (Join-Path $target 'vorher\alt.txt')
 $fileAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule((New-Object System.Security.Principal.SecurityIdentifier('S-1-1-0')), 'Modify', 'Allow')))
 Set-Acl -LiteralPath (Join-Path $target 'vorher\alt.txt') -AclObject $fileAcl
+# GHSA-76j3-2xmj-v25h: Ein ausdrücklicher Eintrag „Jeder: Vollzugriff“ am Ordner selbst muss wegfallen; /grant:r allein
+# ließ ihn stehen. Besitzer des Ordners ist hier nicht der Benutzer (in der CI legt ein Administrator ihn an, Besitzer
+# ist dann die Gruppe der Administratoren); danach muss er es sein, sonst dürfte der alte Besitzer die Rechte neu setzen.
+$dirAcl = Get-Acl -LiteralPath $target
+$dirAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule((New-Object System.Security.Principal.SecurityIdentifier('S-1-1-0')), 'FullControl', 'ContainerInherit, ObjectInherit', 'None', 'Allow')))
+Set-Acl -LiteralPath $target -AclObject $dirAcl
+Check ((Get-Sids $target) -contains 'S-1-1-0') 'Ausgangslage: Am Ordner steht ein Eintrag für Jeder'
 Check (-not (Get-Acl -LiteralPath $target).AreAccessRulesProtected) 'Ausgangslage: Der Ordner erbt die Rechte seines Elternordners'
 # Wie in einer SSH-Sitzung steht in USERDOMAIN nicht der Rechnername (Issue 47). Das Setup erbt die Umgebung.
 $savedDomain = $env:USERDOMAIN
@@ -1077,6 +1085,10 @@ Check (-not ($sids | Where-Object { $_ -notin $allowed })) "Sonst nur SYSTEM und
 foreach ($file in 'WidgetTea.exe', 'vorher\alt.txt') {
     $fileSids = Get-Sids (Join-Path $target $file)
     Check (-not ($fileSids | Where-Object { $_ -notin $allowed })) "$file erbt nur diese Rechte ($($fileSids -join ', '))"
+}
+foreach ($item in @($target) + @('vorher', 'vorher\alt.txt', 'WidgetTea.exe' | ForEach-Object { Join-Path $target $_ })) {
+    $owner = (Get-Acl -LiteralPath $item).GetOwner([System.Security.Principal.SecurityIdentifier]).Value
+    Check ($owner -eq $me) "$item gehört dem Benutzer (Besitzer: $owner)"
 }
 Start-Process -FilePath (Join-Path $target 'uninstall.exe') -ArgumentList '/S' -Wait
 Remove-Item -LiteralPath $target -Recurse -Force -ErrorAction SilentlyContinue
