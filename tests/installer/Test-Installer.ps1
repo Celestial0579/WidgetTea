@@ -1086,10 +1086,16 @@ foreach ($file in 'WidgetTea.exe', 'vorher\alt.txt') {
     $fileSids = Get-Sids (Join-Path $target $file)
     Check (-not ($fileSids | Where-Object { $_ -notin $allowed })) "$file erbt nur diese Rechte ($($fileSids -join ', '))"
 }
-foreach ($item in @($target) + @('vorher', 'vorher\alt.txt', 'WidgetTea.exe' | ForEach-Object { Join-Path $target $_ })) {
+# Was vor dem Setup schon da war, muss danach dem Benutzer gehören. Was das Setup erst anlegt, gehört dem, mit dessen
+# Token es läuft: mit vollem Administrator-Token (so auf den Windows-Runnern von GitHub) der Gruppe der Administratoren,
+# die ohnehin Vollzugriff hat, sonst dem Benutzer. Beides lässt keinem Fremden das Recht, die Rechte neu zu setzen.
+foreach ($item in @($target) + @('vorher', 'vorher\alt.txt' | ForEach-Object { Join-Path $target $_ })) {
     $owner = (Get-Acl -LiteralPath $item).GetOwner([System.Security.Principal.SecurityIdentifier]).Value
     Check ($owner -eq $me) "$item gehört dem Benutzer (Besitzer: $owner)"
 }
+$item = Join-Path $target 'WidgetTea.exe'
+$owner = (Get-Acl -LiteralPath $item).GetOwner([System.Security.Principal.SecurityIdentifier]).Value
+Check ($owner -in @($me, 'S-1-5-32-544')) "$item gehört dem Benutzer oder den Administratoren (Besitzer: $owner)"
 Start-Process -FilePath (Join-Path $target 'uninstall.exe') -ArgumentList '/S' -Wait
 Remove-Item -LiteralPath $target -Recurse -Force -ErrorAction SilentlyContinue
 
