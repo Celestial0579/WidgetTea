@@ -557,7 +557,7 @@ Function DirectoryLeave
   Push $R0
   Call IsOutsideProfile
   ${If} $R0 == 1
-    MessageBox MB_YESNO|MB_ICONEXCLAMATION "Der Ordner liegt außerhalb deines Benutzerprofils.$\r$\n$\r$\nDas Setup beschränkt seine Rechte auf dich, damit kein anderer Benutzer die Programmdateien austauschen kann. Gehört der Ordner einem anderen Benutzer oder liegen dort schon fremde Dateien, hilft das nicht.$\r$\n$\r$\nTrotzdem dorthin installieren?" IDYES ok
+    MessageBox MB_YESNO|MB_ICONEXCLAMATION "Der Ordner liegt außerhalb deines Benutzerprofils.$\r$\n$\r$\nDas Setup macht dich zum Besitzer des Ordners und von allem darin und beschränkt die Rechte auf dich, damit kein anderer Benutzer die Programmdateien austauschen kann. Was ein anderer dort schon abgelegt hat, bleibt aber liegen. Am sichersten ist ein neuer, leerer Ordner.$\r$\n$\r$\nTrotzdem dorthin installieren?" IDYES ok
     Pop $R0
     Abort
   ok:
@@ -565,8 +565,10 @@ Function DirectoryLeave
   Pop $R0
 FunctionEnd
 
-; Außerhalb des Profils: Vererbung aus, Vollzugriff nur für den Benutzer, SYSTEM und die Administratoren; was
-; schon im Ordner liegt, übernimmt diese Rechte. Gelingt das nicht, wird nicht installiert.
+; Außerhalb des Profils: Der Benutzer wird Besitzer des Ordners und von allem darin. Vererbung aus, Vollzugriff nur
+; für den Benutzer, SYSTEM und die Administratoren; was schon im Ordner liegt, erbt nur noch diese Rechte. Fremde
+; ausdrückliche Einträge (etwa „Jeder: Vollzugriff“) und ein fremder Besitzer, der die Rechte jederzeit neu setzen
+; dürfte, fallen weg (GHSA-76j3-2xmj-v25h). Gelingt ein Schritt nicht, wird nicht installiert.
 ; Der Benutzer geht per SID an icacls, nicht als %USERDOMAIN%\%USERNAME%: In manchen Sitzungen (etwa über SSH) steht
 ; in USERDOMAIN „WORKGROUP“, und icacls kennt das Konto dann nicht (Issue 47). Ergebnis in $R2, leer bei Fehler.
 Function CurrentUserSid
@@ -614,32 +616,104 @@ Function CurrentUserSid
   Pop $R0
 FunctionEnd
 
+; Setzt Besitzer und Rechte von $INSTDIR in einem Aufruf (SetNamedSecurityInfo), damit der Ordner zu keinem Zeitpunkt
+; offen steht: Besitzer ist der Benutzer ($R2 = seine SID), die Rechte sind geschützt und bestehen nur aus Vollzugriff
+; für ihn, SYSTEM und die Administratoren. Was darin erbt, bekommt dieselben Rechte. Ergebnis in $R0, 0 bei Erfolg.
+; icacls kann das nicht in einem Schritt: /grant:r ersetzt nur die Einträge der genannten Konten, und /reset ließe
+; den Ordner kurz die offenen Rechte des Elternordners erben.
+Function ProtectInstDir
+  Push $R3
+  Push $R4
+  Push $R5
+  Push $R6
+  Push $R7
+  Push $R8
+  Push $R9
+  StrCpy $R0 1
+  StrCpy $R3 "O:$R2D:PAI(A;OICI;FA;;;$R2)(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)"
+  StrCpy $R4 0
+  System::Call 'advapi32::ConvertStringSecurityDescriptorToSecurityDescriptorW(w R3, i 1, *p .R4, p 0) i .R5'   ; 1 = SDDL_REVISION_1
+  ${If} $R5 != 0
+  ${AndIf} $R4 != 0
+    StrCpy $R6 0
+    StrCpy $R7 0
+    StrCpy $R9 0
+    System::Call 'advapi32::GetSecurityDescriptorOwner(p R4, *p .R6, *i .R8) i .R5'
+    ${If} $R5 != 0
+      System::Call 'advapi32::GetSecurityDescriptorDacl(p R4, *i .R9, *p .R7, *i .R8) i .R5'
+    ${EndIf}
+    ${If} $R5 != 0
+    ${AndIf} $R6 != 0
+    ${AndIf} $R7 != 0
+    ${AndIf} $R9 != 0
+      StrCpy $R3 "$INSTDIR"
+      ; 1 = SE_FILE_OBJECT; 0x80000005 = PROTECTED_DACL_ | DACL_ | OWNER_SECURITY_INFORMATION
+      System::Call 'advapi32::SetNamedSecurityInfoW(w R3, i 1, i 0x80000005, p R6, p 0, p R7, p 0) i .R0'
+    ${EndIf}
+    System::Call 'kernel32::LocalFree(p R4)'
+  ${EndIf}
+  Pop $R9
+  Pop $R8
+  Pop $R7
+  Pop $R6
+  Pop $R5
+  Pop $R4
+  Pop $R3
+FunctionEnd
+
 Function SecureInstDir
   Push $R0
   Push $R1
   Push $R2
+  Push $R3
+  Push $R4
   Call IsOutsideProfile
   ${If} $R0 == 1
     CreateDirectory "$INSTDIR"
     Call CurrentUserSid
     StrCpy $R0 1                    ; ohne SID gilt es als gescheitert
     ${If} $R2 != ""
-      nsExec::ExecToStack '"$SYSDIR\icacls.exe" "$INSTDIR" /inheritance:r /grant:r "*$R2:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F"'
+      Call ProtectInstDir
+    ${EndIf}
+    ; Was schon darin liegt, geht an den Benutzer: Ein fremder Besitzer dürfte die Rechte einer Datei sonst jederzeit
+    ; neu setzen. Darf der Benutzer etwas nicht übernehmen, wird nicht installiert.
+    ${If} $R0 == 0
+      nsExec::ExecToStack '"$SYSDIR\icacls.exe" "$INSTDIR" /setowner "*$R2" /T /Q'
       Pop $R0                       ; Exitcode
       Pop $R1                       ; Ausgabe
     ${EndIf}
+    ; Und es erbt ab jetzt nur noch die Rechte des Ordners (fremde ausdrückliche Rechte fallen weg). Nur wenn etwas
+    ; darin liegt: In einem leeren Ordner fände icacls nichts.
+    ${If} $R0 == 0
+      StrCpy $R3 0
+      FindFirst $R4 $R1 "$INSTDIR\*"
+      ${DoWhile} $R1 != ""
+        ${If} $R1 != "."
+        ${AndIf} $R1 != ".."
+          StrCpy $R3 1
+          ${Break}
+        ${EndIf}
+        FindNext $R4 $R1
+      ${Loop}
+      FindClose $R4
+      ${If} $R3 == 1
+        nsExec::ExecToStack '"$SYSDIR\icacls.exe" "$INSTDIR\*" /reset /T /Q'
+        Pop $R0
+        Pop $R1
+      ${EndIf}
+    ${EndIf}
     ${If} $R0 != 0
       MessageBox MB_OK|MB_ICONSTOP "Die Rechte des Installationsordners ließen sich nicht auf dich beschränken:$\r$\n$INSTDIR$\r$\n$\r$\nBitte einen Ordner im eigenen Benutzerprofil wählen." /SD IDOK
+      Pop $R4
+      Pop $R3
       Pop $R2
       Pop $R1
       Pop $R0
       Abort
     ${EndIf}
-    ; Was schon darin liegt, erbt ab jetzt nur noch diese Rechte (fremde ausdrückliche Rechte fallen weg).
-    nsExec::ExecToStack '"$SYSDIR\icacls.exe" "$INSTDIR\*" /reset /T /C /Q'
-    Pop $R0
-    Pop $R1
   ${EndIf}
+  Pop $R4
+  Pop $R3
   Pop $R2
   Pop $R1
   Pop $R0
