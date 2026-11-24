@@ -50,10 +50,15 @@
 
 .PARAMETER Force
   Läuft auch außerhalb der CI. Nur auf einem Wegwerf-Rechner benutzen.
+
+.PARAMETER OutsideProfile
+  Legt den Arbeitsordner wie in der CI außerhalb des Benutzerprofils an (direkt unter der Laufwerkswurzel), sodass die
+  Stufen den Weg außerhalb des Profils nehmen. In der CI gilt das immer.
 #>
 [CmdletBinding()]
 param(
-    [switch]$Force
+    [switch]$Force,
+    [switch]$OutsideProfile
 )
 
 $ErrorActionPreference = 'Stop'
@@ -71,7 +76,12 @@ $out = Join-Path $root "artifacts\$version"
 $publishDir = Join-Path $out 'publish'
 $setup = Join-Path $out "WidgetTea-$version-setup.exe"
 $logs = Join-Path $root 'artifacts\test-logs'
-$work = Join-Path $(if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { $env:TEMP }) 'widgettea-installertest'
+# In der CI liegt der Arbeitsordner außerhalb jedes Profils, damit die Stufen den Weg außerhalb des Profils nehmen. Dort
+# prüft das Setup auch jeden Ordner darüber (GHSA-39vg-vcch-v4vj). Er liegt deshalb direkt unter der Laufwerkswurzel und
+# bekommt feste Rechte, statt zu erben, was der Runner unter RUNNER_TEMP vorgibt. Sonst liegt er unter %TEMP%.
+$outsideProfile = [bool]$env:RUNNER_TEMP -or $OutsideProfile
+$work = Join-Path $(if ($outsideProfile) { "$env:SystemDrive\" } else { $env:TEMP }) 'widgettea-installertest'
+$me = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $settingsDir = Join-Path $env:LOCALAPPDATA 'WidgetTea'
 $settingsFile = Join-Path $settingsDir 'settings.json'
 $regKey = 'HKCU:\Software\Celestial0579\WidgetTea'   # seit 1.1.3 unter dem Herstellerschlüssel
@@ -86,8 +96,28 @@ $oldSetupUrl = "https://github.com/Celestial0579/WidgetTea/releases/download/v$o
 if (-not (Test-Path $setup)) { throw "Setup fehlt: $setup – erst build\release.ps1 laufen lassen." }
 if (((Test-Path $regKey) -or (Test-Path $oldRegKey)) -and -not $Force) { throw "WidgetTea ist auf diesem Rechner schon installiert ($regKey oder $oldRegKey). Abbruch." }
 
+# Ein Ordner mit festen Rechten: Vollzugriff nur für den Benutzer, SYSTEM und die Administratoren, nichts geerbt.
+# So hängt nicht von den Vorgaben des Systems ab, ob das Setup einen Ordner darüber annimmt.
+# Besitzer ist, wer ihn anlegt: der Benutzer, mit Administrator-Token die Gruppe der Administratoren; beides nimmt das
+# Setup an. Über icacls, nicht Set-Acl: Set-Acl schriebe mit eingeschränktem Token auch die SACL und scheiterte an
+# SeSecurityPrivilege.
+function New-ClosedDir([string]$Path) {
+    New-Item -ItemType Directory -Force $Path | Out-Null
+    $icacls = "$env:SystemRoot\System32\icacls.exe"
+    & $icacls $Path /inheritance:r /grant:r "*${me}:(OI)(CI)F" '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' /Q | Out-Null
+    if ($LASTEXITCODE) { throw "icacls /grant:r für $Path fehlgeschlagen ($LASTEXITCODE)" }
+}
+
 Remove-Item -Recurse -Force $work, $logs -ErrorAction SilentlyContinue
-New-Item -ItemType Directory -Force $work, $logs | Out-Null
+New-Item -ItemType Directory -Force $logs | Out-Null
+if ($outsideProfile) {
+    New-ClosedDir $work
+    # Die Rechte der Wurzel stehen im Protokoll: Lehnt das Setup sie als Ordner darüber ab, zeigt sich hier, warum.
+    Write-Host "Arbeitsordner außerhalb des Profils: $work, darüber $env:SystemDrive\"
+    & "$env:SystemRoot\System32\icacls.exe" "$env:SystemDrive\" | ForEach-Object { Write-Host "  $_" }
+} else {
+    New-Item -ItemType Directory -Force $work | Out-Null
+}
 
 # ---------------------------------------------------------------- Hilfen
 
@@ -1048,17 +1078,17 @@ Check (-not (Test-Path $target)) 'Die Deinstallation entfernt den Ordner'
 # ---------------------------------------------------------------- 15 Rechte des Installationsordners
 
 Step '15 Installationsordner außerhalb des Benutzerprofils: Zugriff nur für den Benutzer'
-# Issue 34. Ein Ordner unter C:\Users\Public liegt außerhalb jedes Benutzerprofils und erbt Rechte, mit denen alle
-# Benutzer dort schreiben dürfen, wie C:\WidgetTea die der Laufwerkswurzel. (Nicht der Arbeitsordner: Außerhalb
-# der CI liegt der unter %TEMP%, also im Profil.) Ein Unterordner mit einer Datei liegt schon da, wie Reste eines anderen.
+# Issue 34. Ein Ordner direkt unter der Laufwerkswurzel liegt außerhalb jedes Benutzerprofils und erbt Rechte, mit
+# denen alle Benutzer dort schreiben dürfen. (Nicht der Arbeitsordner: Außerhalb der CI liegt der unter %TEMP%, also im
+# Profil. Und nicht C:\Users\Public: Dort dürfen andere Konten oft löschen, das Setup lehnt ihn als Ordner darüber ab,
+# siehe 15c.) Ein Unterordner mit einer Datei liegt schon da, wie Reste eines anderen.
 function Get-Sids([string]$Path) {
     @((Get-Acl -LiteralPath $Path).Access | ForEach-Object {
         try { $_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value } catch { "$($_.IdentityReference)" }
     } | Sort-Object -Unique)
 }
-$me = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $allowed = @($me, 'S-1-5-18', 'S-1-5-32-544')
-$target = Join-Path $env:PUBLIC 'widgettea-rechtepruefung'
+$target = Join-Path "$env:SystemDrive\" 'widgettea-rechtepruefung'
 Remove-Item -LiteralPath $target -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force (Join-Path $target 'vorher') | Out-Null
 Set-Content -LiteralPath (Join-Path $target 'vorher\alt.txt') -Value 'lag schon da'
@@ -1118,10 +1148,10 @@ function Remove-Junction([string]$Path) {
     # Nur den Verweis löschen, nie den Inhalt des Ziels.
     if (Test-Path -LiteralPath $Path) { [System.IO.Directory]::Delete($Path) }
 }
-$target = Join-Path $env:PUBLIC 'widgettea-sprungpruefung'
-$elsewhere = Join-Path $env:PUBLIC 'widgettea-sprungziel'
+$target = Join-Path "$env:SystemDrive\" 'widgettea-sprungpruefung'
+$elsewhere = Join-Path "$env:SystemDrive\" 'widgettea-sprungziel'
 $jump = Join-Path $target 'vorher\sprung'
-$link = Join-Path $env:PUBLIC 'widgettea-sprung-als-ordner'
+$link = Join-Path "$env:SystemDrive\" 'widgettea-sprung-als-ordner'
 Remove-Junction $jump
 Remove-Junction $link
 Remove-Item -LiteralPath $target, $elsewhere -Recurse -Force -ErrorAction SilentlyContinue
@@ -1151,6 +1181,123 @@ Check ((Get-Acl -LiteralPath $elsewhere).Sddl -eq $before) 'Besitz und Rechte de
 Remove-Junction $link
 Remove-Item -LiteralPath $target, $elsewhere -Recurse -Force -ErrorAction SilentlyContinue
 
+# ---------------------------------------------------------------- 15c Ordner über dem Installationsordner
+
+Step '15c Ordner über dem Installationsordner: Abbruch, wenn ein anderes Konto ihn ändern darf'
+# GHSA-39vg-vcch-v4vj. ProtectInstDir schützt nur den Installationsordner selbst. Darf ein anderes Konto einen Ordner
+# darüber umbenennen, darin löschen oder seine Rechte ändern, oder gehört er ihm, könnte es den geschützten Ordner samt
+# Programm austauschen. Dann bricht das Setup ab, bevor es etwas anlegt oder ändert. Die Ordner darüber legt die Stufe
+# mit festen Rechten an (nur der Benutzer, SYSTEM und die Administratoren), damit das Ergebnis nicht von den
+# Vorgaben des Systems abhängt; jeder Fall ändert genau eine Sache daran.
+function Test-Refused([string]$Parent, [string]$What) {
+    $dir = Join-Path $Parent 'WidgetTea'
+    $before = if (Test-Path -LiteralPath $Parent) { (Get-Acl -LiteralPath $Parent).Sddl } else { $null }
+    $r = Invoke-Setup $setup @('/S', "/D=$dir")
+    Check ($r.ExitCode -eq 2) "${What}: Exitcode 2 (war $($r.ExitCode))"
+    Check (-not (Test-Path -LiteralPath $dir)) "${What}: Der Installationsordner ist nicht angelegt"
+    if ($null -ne $before) {
+        Check ((Get-Acl -LiteralPath $Parent).Sddl -eq $before) "${What}: Besitz und Rechte des Ordners darüber unverändert"
+    } else {
+        Check (-not (Test-Path -LiteralPath $Parent)) "${What}: Auch der fehlende Ordner darüber ist nicht angelegt"
+    }
+}
+$root = "$env:SystemDrive\"
+$closed = Join-Path $root 'widgettea-eltern-sicher'
+$foreignRight = Join-Path $root 'widgettea-eltern-fremdrecht'
+$foreignOwner = Join-Path $root 'widgettea-eltern-fremdbesitz'
+$parentJump = Join-Path $root 'widgettea-eltern-sprung'
+$jumpTarget = Join-Path $root 'widgettea-eltern-sprungziel'
+$missing = Join-Path $root 'widgettea-eltern-fehlt'
+function Clear-ParentTest {
+    Remove-Junction $parentJump
+    foreach ($p in @($closed, $foreignRight, $foreignOwner, $jumpTarget, $missing)) {
+        if (Test-Path -LiteralPath $p) {
+            & "$env:SystemRoot\System32\icacls.exe" $p /setowner "*$me" /T /C /Q 2>&1 | Out-Null
+            Remove-Item -LiteralPath $p -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+Clear-ParentTest
+
+# Gegenstück: Ein Ordner darüber, den nur der Benutzer, SYSTEM und die Administratoren ändern dürfen, ist in Ordnung.
+New-ClosedDir $closed
+$dir = Join-Path $closed 'WidgetTea'
+$r = Invoke-Setup $setup @('/S', "/D=$dir")
+Check ($r.ExitCode -eq 0) "Sicherer Ordner darüber: Exitcode 0 (war $($r.ExitCode))"
+Check (Test-Path -LiteralPath (Join-Path $dir 'WidgetTea.exe')) 'Sicherer Ordner darüber: installiert'
+Start-Process -FilePath (Join-Path $dir 'uninstall.exe') -ArgumentList '/S' -Wait
+Wait-Gone $dir
+
+# Ein anderes Konto darf den Ordner darüber ändern (hier: alle angemeldeten Benutzer, „Ändern“ schließt Löschen ein).
+New-ClosedDir $foreignRight
+# icacls statt Set-Acl: Set-Acl schriebe mit eingeschränktem Token auch die SACL und scheiterte an SeSecurityPrivilege.
+& "$env:SystemRoot\System32\icacls.exe" $foreignRight /grant '*S-1-5-11:(OI)(CI)M' /Q | Out-Null
+Check ($LASTEXITCODE -eq 0) 'Fremdes Recht am Ordner darüber: Ausgangslage hergestellt'
+Test-Refused $foreignRight 'Fremdes Recht am Ordner darüber'
+
+# Der Ordner darüber gehört einem anderen Konto (hier der Gruppe Benutzer). Einen fremden Besitzer setzen darf nur ein
+# Administrator-Token; ohne wird der Fall übersprungen.
+New-ClosedDir $foreignOwner
+& "$env:SystemRoot\System32\icacls.exe" $foreignOwner /setowner '*S-1-5-32-545' /Q 2>&1 | Out-Null
+$owner = (Get-Acl -LiteralPath $foreignOwner).GetOwner([System.Security.Principal.SecurityIdentifier]).Value
+if ($owner -eq 'S-1-5-32-545') {
+    Test-Refused $foreignOwner 'Fremder Besitzer des Ordners darüber'
+} else {
+    Note 'Fremder Besitzer des Ordners darüber: übersprungen, einen fremden Besitzer setzt nur ein Administrator-Token'
+}
+
+# Der Ordner darüber ist eine Junction: Das Setup legt nichts an, auch nicht an ihrem Ziel.
+New-ClosedDir $jumpTarget
+New-Item -ItemType Junction -Path $parentJump -Target $jumpTarget | Out-Null
+$before = (Get-Acl -LiteralPath $jumpTarget).Sddl
+Test-Refused $parentJump 'Junction als Ordner darüber'
+Check (-not (Test-Path -LiteralPath (Join-Path $jumpTarget 'WidgetTea'))) 'Junction als Ordner darüber: Am Ziel der Junction ist nichts angelegt'
+Check ((Get-Acl -LiteralPath $jumpTarget).Sddl -eq $before) 'Junction als Ordner darüber: Besitz und Rechte des Ziels unverändert'
+
+# Den Ordner darüber gibt es nicht: Das Setup legt keine Ordner dazwischen an, sie erbten die Rechte darüber.
+Test-Refused $missing 'Fehlender Ordner darüber'
+
+Clear-ParentTest
+
+# ---------------------------------------------------------------- 15d Selbst-Update unter einem unsicheren Ordner
+
+Step '15d Selbst-Update, wenn ein Ordner darüber unsicher ist: sichtbarer Hinweis, die alte Version läuft weiter'
+# GHSA-39vg-vcch-v4vj. Ist ein Ordner darüber erst nach der Installation unsicher geworden, oder stammt die Installation
+# aus einer Version ohne diese Prüfung, lehnt das Setup auch das Update ab. Beim Selbst-Update sagt es das sichtbar,
+# startet die bisherige Version wieder und schaltet automatische Updates aus, damit der Hinweis nicht nach jedem Start
+# erneut kommt.
+$updParent = Join-Path $root 'widgettea-eltern-update'
+$updDir = Join-Path $updParent 'WidgetTea'
+$updExe = Join-Path $updDir 'WidgetTea.exe'
+Remove-Item -LiteralPath $updParent -Recurse -Force -ErrorAction SilentlyContinue
+New-ClosedDir $updParent
+Write-Settings $settingsOriginal
+Remove-Item -LiteralPath (Join-Path $settingsDir 'autoupdate-paused') -Force -ErrorAction SilentlyContinue
+$r = Invoke-Setup $setup @('/S', "/D=$updDir")
+Check ($r.ExitCode -eq 0) "Installiert unter einem sicheren Ordner: Exitcode 0 (war $($r.ExitCode))"
+& "$env:SystemRoot\System32\icacls.exe" $updParent /grant '*S-1-5-11:(OI)(CI)M' /Q | Out-Null
+Check ($LASTEXITCODE -eq 0) 'Ausgangslage: Alle angemeldeten Benutzer dürfen den Ordner darüber ändern'
+$before = Get-Snapshot $updDir
+$r = Invoke-Setup $setup @('/S', '/RESTART') ([ordered]@{ 'lässt sich an diesem Ort nicht installieren' = @('OK') })
+Check ($r.ExitCode -eq 2) "Exitcode 2 (war $($r.ExitCode))"
+Check (Test-SameSnapshot $before (Get-Snapshot $updDir)) 'Am Installationsordner hat sich nichts geändert'
+Check (Test-Marker) 'Der Merker für die Rücknahme liegt neben den Einstellungen'
+Check ((Get-AutoUpdate) -eq $false) 'Automatische Updates sind ausgeschaltet'
+$deadline = (Get-Date).AddSeconds(30)
+do {
+    $running = @(Get-Process -Name 'WidgetTea' -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $updExe })
+    if ($running.Count) { break }
+    Start-Sleep -Seconds 1
+} while ((Get-Date) -lt $deadline)
+Check ($running.Count -gt 0) 'Die bisherige Version läuft wieder'
+Stop-App
+& "$env:SystemRoot\System32\icacls.exe" $updParent /remove:g '*S-1-5-11' /Q | Out-Null
+Start-Process -FilePath (Join-Path $updDir 'uninstall.exe') -ArgumentList '/S' -Wait
+Wait-Gone $updDir
+Remove-Item -LiteralPath $updParent -Recurse -Force -ErrorAction SilentlyContinue
+Write-Settings $settingsOriginal
+Remove-Item -LiteralPath (Join-Path $settingsDir 'autoupdate-paused') -Force -ErrorAction SilentlyContinue
+
 # ---------------------------------------------------------------- 16 Ungewöhnliche Pfade, Autostart beim Update von Hand
 
 Step '16 Ordner mit Leerzeichen, Umlauten und langem Namen; ein abgeschalteter Autostart bleibt aus'
@@ -1158,6 +1305,8 @@ Step '16 Ordner mit Leerzeichen, Umlauten und langem Namen; ein abgeschalteter A
 # ohnehin nicht, und Windows legt solche Ordner ohne Freischaltung langer Pfade gar nicht erst an.
 $target = Join-Path $work ('Ordner mit Leerzeichen – Ümläüte ß & Co\' + ('lang' * 20))
 Write-Host "       Ordner: $target ($($target.Length) Zeichen)"
+# Den Ordner darüber gibt es schon: Zwischenordner legt das Setup außerhalb des Profils nicht an (siehe 15c).
+New-Item -ItemType Directory -Force (Split-Path $target) | Out-Null
 $r = Invoke-Setup $setup @('/S', "/D=$target")
 Check ($r.ExitCode -eq 0) "Exitcode 0 (war $($r.ExitCode))"
 Check ((Get-ItemProperty $regKey).InstallDir -eq $target) 'Der Installationsort ist richtig vermerkt'
