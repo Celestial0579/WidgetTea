@@ -64,7 +64,7 @@ Beim ersten Start öffnet sich das Einstellungsfenster:
 Gitea-Adresse, Benutzername und Access-Token eintragen (Gitea → Einstellungen → Anwendungen → Token mit Berechtigung *user: Lesen*),
 mit „Verbindung testen“ prüfen und speichern.
 
-Unbeaufsichtigt: `WidgetTea-<version>-setup.exe /S`. Fehlt dabei die Laufzeit, endet das Setup ohne Nachfrage mit Exitcode 3 und ändert nichts.
+Unbeaufsichtigt: `WidgetTea-<version>-setup.exe /S`. Fehlt dabei die Laufzeit, endet das Setup ohne Nachfrage mit Exitcode 3 und ändert nichts. Bricht es aus einem anderen Grund ab (Exitcode 2), steht die Meldung, die sonst im Fenster käme, in `%TEMP%\WidgetTea-Setup.log`.
 
 Die Deinstallation entfernt genau die Dateien, die das Setup installiert hat. Liegt im Installationsordner noch etwas anderes,
 bleibt es samt Ordner stehen. Einstellungen, Token und Cache bleiben ebenfalls, solange „Benutzerdaten entfernen“ nicht gewählt ist.
