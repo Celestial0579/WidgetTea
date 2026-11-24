@@ -1225,9 +1225,17 @@ $foreignOwner = Join-Path $root 'widgettea-eltern-fremdbesitz'
 $parentJump = Join-Path $root 'widgettea-eltern-sprung'
 $jumpTarget = Join-Path $root 'widgettea-eltern-sprungziel'
 $missing = Join-Path $root 'widgettea-eltern-fehlt'
+$inheritOnly = Join-Path $root 'widgettea-eltern-nur-vererbt'
+# Rechte, die ein anderes Konto am Ordner darüber jeweils allein nicht haben darf (Kürzel von icacls).
+$singleRights = [ordered]@{
+    DC   = 'Unterordner und Dateien löschen'   # FILE_DELETE_CHILD
+    WDAC = 'Berechtigungen ändern'             # WRITE_DAC
+    WO   = 'Besitz übernehmen'                 # WRITE_OWNER
+}
+$singleDirs = @($singleRights.Keys | ForEach-Object { Join-Path $root "widgettea-eltern-nur-$($_.ToLowerInvariant())" })
 function Clear-ParentTest {
     Remove-Junction $parentJump
-    foreach ($p in @($closed, $foreignRight, $foreignOwner, $jumpTarget, $missing)) {
+    foreach ($p in @($closed, $foreignRight, $foreignOwner, $jumpTarget, $missing, $inheritOnly) + $singleDirs) {
         if (Test-Path -LiteralPath $p) {
             & "$env:SystemRoot\System32\icacls.exe" $p /setowner "*$me" /T /C /Q 2>&1 | Out-Null
             Remove-Item -LiteralPath $p -Recurse -Force -ErrorAction SilentlyContinue
@@ -1251,6 +1259,31 @@ New-ClosedDir $foreignRight
 & "$env:SystemRoot\System32\icacls.exe" $foreignRight /grant '*S-1-5-11:(OI)(CI)M' /Q | Out-Null
 Check ($LASTEXITCODE -eq 0) 'Fremdes Recht am Ordner darüber: Ausgangslage hergestellt'
 Test-Refused $foreignRight 'Fremdes Recht am Ordner darüber'
+
+# In „Ändern“ steckt DELETE, das allein schon zur Ablehnung führt. Die anderen Rechte, die das Setup prüft, muss es
+# auch jeweils allein erkennen: ein Ordner darüber je Recht, und nur dieses eine hat ein anderes Konto daran.
+foreach ($right in $singleRights.Keys) {
+    $what = 'Nur „{0}“ ({1}) am Ordner darüber' -f $singleRights[$right], $right
+    $parent = Join-Path $root "widgettea-eltern-nur-$($right.ToLowerInvariant())"
+    New-ClosedDir $parent
+    & "$env:SystemRoot\System32\icacls.exe" $parent /grant "*S-1-5-11:($right)" /Q | Out-Null
+    Check ($LASTEXITCODE -eq 0) "${what}: Ausgangslage hergestellt"
+    Test-Refused $parent $what
+}
+
+# Gegenstück: Ein Eintrag, der nur vererbt wird ((OI)(CI)(IO)), gilt nicht für den Ordner darüber selbst. Die
+# Installation läuft durch, und am Installationsordner bleibt von dem Eintrag nichts stehen.
+New-ClosedDir $inheritOnly
+& "$env:SystemRoot\System32\icacls.exe" $inheritOnly /grant '*S-1-5-11:(OI)(CI)(IO)M' /Q | Out-Null
+Check ($LASTEXITCODE -eq 0) 'Nur vererbter Eintrag am Ordner darüber: Ausgangslage hergestellt'
+$dir = Join-Path $inheritOnly 'WidgetTea'
+$r = Invoke-Setup $setup @('/S', "/D=$dir")
+Check ($r.ExitCode -eq 0) "Nur vererbter Eintrag am Ordner darüber: Exitcode 0 (war $($r.ExitCode))"
+Check (Test-Path -LiteralPath (Join-Path $dir 'WidgetTea.exe')) 'Nur vererbter Eintrag am Ordner darüber: installiert'
+$sids = Get-Sids $dir
+Check (-not ($sids | Where-Object { $_ -notin $allowed })) "Nur vererbter Eintrag am Ordner darüber: Am Installationsordner nur der Benutzer, SYSTEM und die Administratoren ($($sids -join ', '))"
+Start-Process -FilePath (Join-Path $dir 'uninstall.exe') -ArgumentList '/S' -Wait
+Wait-Gone $dir
 
 # Der Ordner darüber gehört einem anderen Konto (hier der Gruppe Benutzer). Einen fremden Besitzer setzen darf nur ein
 # Administrator-Token; ohne wird der Fall übersprungen.
