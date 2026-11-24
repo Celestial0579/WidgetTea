@@ -56,18 +56,10 @@ jobs:
         shell: powershell
         run: ./tests/release/Test-ReleaseChecks.ps1
 
-      # Bis zu drei Versuche: Der Download über Chocolatey scheitert gelegentlich, vor allem wenn mehrere Jobs
-      # gleichzeitig installieren.
+      # Chocolatey mit bis zu drei Versuchen, bei einem Ausfall des Feeds winget (#59).
       - name: NSIS bereitstellen
         shell: pwsh
-        run: |
-          $makensis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe", "$env:ProgramFiles\NSIS\makensis.exe"
-          for ($try = 1; $try -le 3 -and -not ($makensis | Where-Object { Test-Path $_ }); $try++) {
-            if ($try -gt 1) { Start-Sleep -Seconds 20 }
-            choco install nsis -y --no-progress
-          }
-          if (-not ($makensis | Where-Object { Test-Path $_ })) { throw 'NSIS ließ sich nicht installieren' }
-          exit 0
+        run: ./.github/nsis-bereitstellen.ps1
 
       - name: Setup bauen (ohne Veröffentlichung)
         shell: pwsh
@@ -129,18 +121,10 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
-      # Bis zu drei Versuche: Der Download über Chocolatey scheitert gelegentlich, vor allem wenn mehrere Jobs
-      # gleichzeitig installieren.
+      # Chocolatey mit bis zu drei Versuchen, bei einem Ausfall des Feeds winget (#59).
       - name: NSIS bereitstellen
         shell: pwsh
-        run: |
-          $makensis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe", "$env:ProgramFiles\NSIS\makensis.exe"
-          for ($try = 1; $try -le 3 -and -not ($makensis | Where-Object { Test-Path $_ }); $try++) {
-            if ($try -gt 1) { Start-Sleep -Seconds 20 }
-            choco install nsis -y --no-progress
-          }
-          if (-not ($makensis | Where-Object { Test-Path $_ })) { throw 'NSIS ließ sich nicht installieren' }
-          exit 0
+        run: ./.github/nsis-bereitstellen.ps1
 
       - name: Selbst-Update-Prüfungen
         shell: pwsh
@@ -169,22 +153,10 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
-      # Bis zu drei Versuche: Der Download über Chocolatey scheitert gelegentlich, vor allem wenn mehrere Jobs
-      # gleichzeitig installieren.
+      # Chocolatey mit bis zu drei Versuchen, bei einem Ausfall des Feeds winget (#59).
       - name: NSIS bereitstellen
         shell: pwsh
-        run: |
-          $makensis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe", "$env:ProgramFiles\NSIS\makensis.exe"
-          for ($try = 1; $try -le 3 -and -not ($makensis | Where-Object { Test-Path $_ }); $try++) {
-            if ($try -gt 1) { Start-Sleep -Seconds 20 }
-            if ($try -lt 3 -and (Get-Command choco -ErrorAction SilentlyContinue)) {
-              choco install nsis -y --no-progress
-            } else {
-              winget install --id NSIS.NSIS --exact --source winget --silent --accept-package-agreements --accept-source-agreements --disable-interactivity
-            }
-          }
-          if (-not ($makensis | Where-Object { Test-Path $_ })) { throw 'NSIS ließ sich nicht installieren' }
-          exit 0
+        run: ./.github/nsis-bereitstellen.ps1
 
       - name: Setup bauen (ohne Veröffentlichung)
         shell: pwsh
