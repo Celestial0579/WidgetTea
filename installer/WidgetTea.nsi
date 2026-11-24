@@ -127,6 +127,7 @@ VIAddVersionKey /LANG=1031 "LegalCopyright" "© 2026 Tim Heyne – MIT-Lizenz"
 !include PatchFile.nsh
 
 Var Restart
+Var OrdnerUmgestellt   ; 1, sobald Besitz und Rechte des Installationsordners selbst umgestellt sind
 
 ; ---------- Oberfläche ----------
 !define MUI_ICON "${ICON}"
@@ -661,6 +662,66 @@ Function ProtectInstDir
   Pop $R3
 FunctionEnd
 
+; Sucht unter $INSTDIR, den Ordner selbst eingeschlossen, nach einem Reparse-Punkt (Junction, symbolischer Link,
+; Bereitstellungspunkt) und steigt in keinen davon hinab. Ein Eintrag, dessen Attribute sich nicht lesen lassen, und ein
+; Ordner, den das Setup nicht auflisten kann, zählen ebenso: icacls /setowner /T käme durch beides nicht hindurch, und
+; der Ordner bliebe halb umgestellt (Issue 52). Ergebnis in $R0: der erste Fund oder leer.
+Function FindReparsePoint
+  Push $R1
+  Push $R2
+  Push $R3
+  Push $R4
+  Push $R5
+  Push $R6
+  StrCpy $R0 ""
+  System::Call 'kernel32::GetFileAttributesW(w "$INSTDIR") i .R4'
+  IntOp $R6 $R4 & 0x400             ; FILE_ATTRIBUTE_REPARSE_POINT
+  ${If} $R4 = -1
+  ${OrIf} $R6 <> 0
+    StrCpy $R0 "$INSTDIR"
+  ${EndIf}
+  Push "$INSTDIR"
+  StrCpy $R5 1                      ; Ordner auf dem Stapel, die noch zu durchsuchen sind
+  ${DoWhile} $R5 > 0
+    Pop $R1
+    IntOp $R5 $R5 - 1
+    ${If} $R0 != ""
+      ${Continue}                   ; schon gefunden: nur noch den Stapel leeren
+    ${EndIf}
+    ClearErrors
+    FindFirst $R2 $R3 "$R1\*"
+    ${If} $R3 == ""                 ; nicht einmal "." gefunden: nicht auflistbar
+      StrCpy $R0 "$R1"
+      ${Continue}
+    ${EndIf}
+    ${DoWhile} $R3 != ""
+      ${If} $R3 != "."
+      ${AndIf} $R3 != ".."
+        System::Call 'kernel32::GetFileAttributesW(w "$R1\$R3") i .R4'
+        IntOp $R6 $R4 & 0x400
+        ${If} $R4 = -1
+        ${OrIf} $R6 <> 0
+          StrCpy $R0 "$R1\$R3"
+          ${Break}
+        ${EndIf}
+        IntOp $R6 $R4 & 0x10        ; FILE_ATTRIBUTE_DIRECTORY
+        ${If} $R6 <> 0
+          Push "$R1\$R3"
+          IntOp $R5 $R5 + 1
+        ${EndIf}
+      ${EndIf}
+      FindNext $R2 $R3
+    ${Loop}
+    FindClose $R2
+  ${Loop}
+  Pop $R6
+  Pop $R5
+  Pop $R4
+  Pop $R3
+  Pop $R2
+  Pop $R1
+FunctionEnd
+
 Function SecureInstDir
   Push $R0
   Push $R1
@@ -670,10 +731,25 @@ Function SecureInstDir
   Call IsOutsideProfile
   ${If} $R0 == 1
     CreateDirectory "$INSTDIR"
+    ; Erst prüfen, dann ändern: Liegt ein Verweis im Ordner, bliebe er sonst halb umgestellt (Issue 52).
+    Call FindReparsePoint
+    ${If} $R0 != ""
+      MessageBox MB_OK|MB_ICONSTOP "Im Installationsordner liegt ein Verweis auf einen anderen Ort (Junction oder symbolischer Link) oder etwas, das das Setup nicht lesen kann:$\r$\n$R0$\r$\n$\r$\nAm Ordner wurde nichts geändert. Bitte einen leeren Ordner wählen oder einen im eigenen Benutzerprofil." /SD IDOK
+      Pop $R4
+      Pop $R3
+      Pop $R2
+      Pop $R1
+      Pop $R0
+      Abort
+    ${EndIf}
+    StrCpy $OrdnerUmgestellt 0
     Call CurrentUserSid
     StrCpy $R0 1                    ; ohne SID gilt es als gescheitert
     ${If} $R2 != ""
       Call ProtectInstDir
+    ${EndIf}
+    ${If} $R0 == 0
+      StrCpy $OrdnerUmgestellt 1
     ${EndIf}
     ; Was schon darin liegt, geht an den Benutzer: Ein fremder Besitzer dürfte die Rechte einer Datei sonst jederzeit
     ; neu setzen. Darf der Benutzer etwas nicht übernehmen, wird nicht installiert.
@@ -703,7 +779,11 @@ Function SecureInstDir
       ${EndIf}
     ${EndIf}
     ${If} $R0 != 0
-      MessageBox MB_OK|MB_ICONSTOP "Die Rechte des Installationsordners ließen sich nicht auf dich beschränken:$\r$\n$INSTDIR$\r$\n$\r$\nBitte einen Ordner im eigenen Benutzerprofil wählen." /SD IDOK
+      StrCpy $R1 "Bitte einen Ordner im eigenen Benutzerprofil wählen."
+      ${If} $OrdnerUmgestellt == 1
+        StrCpy $R1 "Besitz und Rechte des Ordners selbst sind schon auf dich umgestellt, sein Inhalt nur zum Teil.$\r$\n$\r$\n$R1"
+      ${EndIf}
+      MessageBox MB_OK|MB_ICONSTOP "Die Rechte des Installationsordners ließen sich nicht auf dich beschränken:$\r$\n$INSTDIR$\r$\n$\r$\n$R1" /SD IDOK
       Pop $R4
       Pop $R3
       Pop $R2

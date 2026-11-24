@@ -1108,6 +1108,49 @@ Start-Process -FilePath (Join-Path $target 'uninstall.exe') -ArgumentList '/S' -
 Wait-Gone $target
 Check (-not (Test-Path $target)) 'Die Deinstallation entfernt den Ordner'
 
+# ---------------------------------------------------------------- 15b Verweis im Installationsordner
+
+Step '15b Installationsordner mit Junction: Abbruch, bevor etwas umgestellt ist'
+# Issue 52. icacls /setowner /T läuft nicht durch eine Junction. Bisher hatte das Setup den Ordner selbst da schon
+# umgestellt und ließ ihn halb umgestellt zurück. Jetzt prüft es vorher und ändert nichts, auch nicht am Ziel des
+# Verweises. Dasselbe gilt, wenn der gewählte Ordner selbst eine Junction ist.
+function Remove-Junction([string]$Path) {
+    # Nur den Verweis löschen, nie den Inhalt des Ziels.
+    if (Test-Path -LiteralPath $Path) { [System.IO.Directory]::Delete($Path) }
+}
+$target = Join-Path $env:PUBLIC 'widgettea-sprungpruefung'
+$elsewhere = Join-Path $env:PUBLIC 'widgettea-sprungziel'
+$jump = Join-Path $target 'vorher\sprung'
+$link = Join-Path $env:PUBLIC 'widgettea-sprung-als-ordner'
+Remove-Junction $jump
+Remove-Junction $link
+Remove-Item -LiteralPath $target, $elsewhere -Recurse -Force -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Force (Join-Path $target 'vorher') | Out-Null
+Set-Content -LiteralPath (Join-Path $target 'vorher\alt.txt') -Value 'lag schon da'
+New-Item -ItemType Directory -Force $elsewhere | Out-Null
+Set-Content -LiteralPath (Join-Path $elsewhere 'fremd.txt') -Value 'gehört woanders hin'
+New-Item -ItemType Junction -Path $jump -Target $elsewhere | Out-Null
+$watched = @($target, (Join-Path $target 'vorher'), (Join-Path $target 'vorher\alt.txt'), $elsewhere, (Join-Path $elsewhere 'fremd.txt'))
+$before = @{}
+foreach ($item in $watched) { $before[$item] = (Get-Acl -LiteralPath $item).Sddl }
+$r = Invoke-Setup $setup @('/S', "/D=$target")
+Check ($r.ExitCode -eq 2) "Exitcode 2 (war $($r.ExitCode))"
+Check (-not (Test-Path -LiteralPath (Join-Path $target 'WidgetTea.exe'))) 'Es ist nichts installiert'
+foreach ($item in $watched) {
+    Check ((Get-Acl -LiteralPath $item).Sddl -eq $before[$item]) "${item}: Besitz und Rechte unverändert"
+}
+
+# Der gewählte Ordner ist selbst eine Junction.
+Remove-Junction $jump
+New-Item -ItemType Junction -Path $link -Target $elsewhere | Out-Null
+$before = (Get-Acl -LiteralPath $elsewhere).Sddl
+$r = Invoke-Setup $setup @('/S', "/D=$link")
+Check ($r.ExitCode -eq 2) "Exitcode 2 (war $($r.ExitCode))"
+Check (-not (Test-Path -LiteralPath (Join-Path $elsewhere 'WidgetTea.exe'))) 'Im Ziel der Junction ist nichts installiert'
+Check ((Get-Acl -LiteralPath $elsewhere).Sddl -eq $before) 'Besitz und Rechte des Ziels unverändert'
+Remove-Junction $link
+Remove-Item -LiteralPath $target, $elsewhere -Recurse -Force -ErrorAction SilentlyContinue
+
 # ---------------------------------------------------------------- 16 Ungewöhnliche Pfade, Autostart beim Update von Hand
 
 Step '16 Ordner mit Leerzeichen, Umlauten und langem Namen; ein abgeschalteter Autostart bleibt aus'
