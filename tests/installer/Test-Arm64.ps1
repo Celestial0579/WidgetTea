@@ -42,10 +42,10 @@ $root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $version = $proj.Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1
 $setup = Join-Path $root "artifacts\$version\WidgetTea-$version-setup.exe"
 $logs = Join-Path $root 'artifacts\test-logs'
-# Der Arbeitsordner, und mit ihm der Installationsordner, liegt im Profil. Außerhalb prüft das Setup auch jeden Ordner
-# darüber (GHSA-39vg-vcch-v4vj). Es ist dasselbe x86-Setup wie auf x64, und dort prüfen Test-Installer.ps1 und
-# Test-SelfUpdate.ps1 diesen Weg. Was auf dem ARM64-Runner dabei anders ist, zeigt Show-ClosedDirDiagnosis.
-$work = Join-Path $env:LOCALAPPDATA 'widgettea-arm64'
+# Der Arbeitsordner, und mit ihm der Installationsordner, liegt außerhalb des Profils direkt unter der Laufwerkswurzel,
+# wie bei den Prüfungen auf x64. Dort prüft das Setup auch jeden Ordner darüber (GHSA-39vg-vcch-v4vj), also bekommt er
+# feste Rechte (New-ClosedDir), statt zu erben, was der Runner vorgibt.
+$work = Join-Path "$env:SystemDrive\" 'widgettea-arm64'
 $target = Join-Path $work 'installiert'
 $setupLog = Join-Path ([System.IO.Path]::GetTempPath()) 'WidgetTea-Setup.log'   # schreibt das Setup bei einem stillen Abbruch
 $regKey = 'HKCU:\Software\Celestial0579\WidgetTea'
@@ -80,34 +80,9 @@ function New-ClosedDir([string]$Path) {
     if (-not $acl.AreAccessRulesProtected -or $left.Count) { throw "$Path hat nicht die festen Rechte: $($acl.Sddl)" }
 }
 
-# Nur zur Diagnose, das Ergebnis der Prüfung hängt nicht davon ab, und sie bricht nie ab: Auf dem ARM64-Runner
-# (Windows 11 26200) lehnte das Setup einen mit New-ClosedDir geschlossenen Ordner direkt unter C:\ ab, weil
-# Authenticated Users ihn ändern durfte. Auf x64 und auf einem Windows 11 x64 (26100) nimmt es denselben Ordner an.
-# Hier entsteht ein solcher Ordner samt Unterordner, und die Rechte von Unterordner, Ordner und Wurzel stehen im
-# Protokoll, die des Ordners zwei Sekunden später noch einmal (so lange lag er vor dem Setup). Das Setup läuft nicht
-# dagegen.
-function Show-ClosedDirDiagnosis {
-    $dir = Join-Path "$env:SystemDrive\" 'widgettea-arm64-diagnose'
-    $sub = Join-Path $dir 'installiert'
-    Write-Host "`n== Diagnose: geschlossener Ordner außerhalb des Profils (ohne Einfluss auf das Ergebnis)" -ForegroundColor Cyan
-    try {
-        Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
-        try { New-ClosedDir $dir } catch { Write-Host "  New-ClosedDir: $($_.Exception.Message)" }
-        if (Test-Path -LiteralPath $dir) {
-            New-Item -ItemType Directory -Force $sub | Out-Null
-            foreach ($p in $sub, $dir, "$env:SystemDrive\") { Write-Host "  SDDL von ${p}: $((Get-Acl -LiteralPath $p).Sddl)" }
-            Start-Sleep -Seconds 2
-            Write-Host "  SDDL von $dir nach 2 s: $((Get-Acl -LiteralPath $dir).Sddl)"
-            Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
-        }
-    } catch {
-        Write-Host "  Diagnose abgebrochen: $($_.Exception.Message)"
-    }
-}
-
 Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
-New-Item -ItemType Directory -Force $work, $logs | Out-Null
-if ($env:CI -eq 'true') { Show-ClosedDirDiagnosis }
+New-ClosedDir $work
+New-Item -ItemType Directory -Force $logs | Out-Null
 
 $script:stage = ''
 function Step([string]$text) { $script:stage = $text; Write-Host "`n== $text" -ForegroundColor Cyan }
