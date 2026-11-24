@@ -41,7 +41,12 @@ $root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 [xml]$proj = Get-Content (Join-Path $root 'WidgetTea.csproj')
 $version = $proj.Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1
 $newVersion = '9.9.9'
-$work = Join-Path $(if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { $env:TEMP }) 'widgettea-selbstupdate'
+# In der CI liegt der Arbeitsordner, und mit ihm der Installationsordner, außerhalb jedes Profils. Dort prüft das Setup
+# auch jeden Ordner darüber (GHSA-39vg-vcch-v4vj) und lehnt ab, was der Runner unter RUNNER_TEMP vorgibt. Wie in
+# tests\installer\Test-Installer.ps1 liegt er deshalb direkt unter der Laufwerkswurzel und bekommt feste Rechte.
+# Sonst liegt er unter %TEMP%.
+$outsideProfile = [bool]$env:RUNNER_TEMP
+$work = Join-Path $(if ($outsideProfile) { "$env:SystemDrive\" } else { $env:TEMP }) 'widgettea-selbstupdate'
 $logs = Join-Path $root 'artifacts\test-logs'
 $serve = Join-Path $work 'server'
 $requests = Join-Path $serve 'anfragen.log'
@@ -52,7 +57,21 @@ $attemptFile = Join-Path $settingsDir 'update-attempt.json'
 $regKey = 'HKCU:\Software\Celestial0579\WidgetTea'
 
 if (((Test-Path $regKey) -or (Test-Path 'HKCU:\Software\WidgetTea')) -and -not $Force) { throw "WidgetTea ist auf diesem Rechner schon installiert ($regKey). Abbruch." }
+# Vollzugriff nur für den Benutzer, SYSTEM und die Administratoren, nichts geerbt; wie in Test-Installer.ps1.
+function New-ClosedDir([string]$Path) {
+    New-Item -ItemType Directory -Force $Path | Out-Null
+    $me = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    & "$env:SystemRoot\System32\icacls.exe" $Path /inheritance:r /grant:r "*${me}:(OI)(CI)F" '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' /Q | Out-Null
+    if ($LASTEXITCODE) { throw "icacls /grant:r für $Path fehlgeschlagen ($LASTEXITCODE)" }
+}
+
 Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
+if ($outsideProfile) {
+    New-ClosedDir $work
+    # Die Rechte der Wurzel stehen im Protokoll: Lehnt das Setup sie als Ordner darüber ab, zeigt sich hier, warum.
+    Write-Host "Arbeitsordner außerhalb des Profils: $work, darüber $env:SystemDrive\"
+    & "$env:SystemRoot\System32\icacls.exe" "$env:SystemDrive\" | ForEach-Object { Write-Host "  $_" }
+}
 New-Item -ItemType Directory -Force $work, $serve, $logs | Out-Null
 
 $script:stage = ''
