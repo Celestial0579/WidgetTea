@@ -1212,7 +1212,10 @@ if ($LASTEXITCODE) { throw 'makensis (Testfassung mit Haltepunkt) fehlgeschlagen
 $haltWaits = Join-Path $haltDir 'wartet'
 $haltGo = Join-Path $haltDir 'weiter'
 $jump = Join-Path $target 'sprung'
-New-Item -ItemType Directory -Force $target, $elsewhere | Out-Null
+# Feste Rechte mit Vollzugriff für den Benutzer: Mit eingeschränktem Token brach das Setup an einem einfach angelegten
+# Ordner unter C:\ schon vor der zweiten Suche ab (Lauf vom 24.11.2026). Geprüft wird hier nur die zweite Suche.
+New-ClosedDir $target
+New-Item -ItemType Directory -Force $elsewhere | Out-Null
 Set-Content -LiteralPath (Join-Path $target 'alt.txt') -Value 'lag schon da'
 Set-Content -LiteralPath (Join-Path $elsewhere 'fremd.txt') -Value 'gehört woanders hin'
 $sidType = [System.Security.Principal.SecurityIdentifier]
@@ -1235,6 +1238,7 @@ Check ($p.ExitCode -eq 2) "Junction während der Installation: Exitcode 2 (war $
 Check (-not (Test-Path -LiteralPath (Join-Path $target 'WidgetTea.exe'))) 'Junction während der Installation: Es ist nichts installiert'
 Check (-not (Test-Path -LiteralPath (Join-Path $elsewhere 'WidgetTea.exe'))) 'Junction während der Installation: Im Ziel der Junction ist nichts installiert'
 $log = if (Test-Path -LiteralPath $setupLog) { Get-Content -LiteralPath $setupLog -Raw -Encoding Unicode } else { '' }
+if ($log -notlike "*während der Installation*$jump*") { Write-Host "   Setup-Protokoll: $(($log -replace '\s+', ' ').Trim())" }
 Check ($log -like "*während der Installation*$jump*") 'Junction während der Installation: Das Protokoll nennt den Grund und den Verweis'
 # Wie die Meldung sagt: Der Ordner selbst ist umgestellt, sein Inhalt noch nicht (icacls /setowner /T lief nicht).
 $acl = Get-Acl -LiteralPath $target
