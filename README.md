@@ -19,6 +19,8 @@ Programmen für alle Konten vorbehalten und bräuchte Adminrechte. Einen eigenen
 von selbst an. Wählt man im Assistenten einen Ordner außerhalb des eigenen Profils, fragt es nach und beschränkt dessen
 Rechte auf das eigene Konto. Den Ordner darüber muss es dann schon geben; gehört er oder einer weiter oben einem anderen
 Konto, oder darf ein anderes Konto ihn umbenennen, darin löschen oder seine Rechte ändern, lehnt das Setup ihn ab.
+Liegt er auf einem Laufwerk, das `subst` oder ein Netzlaufwerk aus einem Unterordner macht, prüft es dasselbe auch für
+die Ordner über dem echten Pfad.
 Trifft das beim Selbst-Update eine bestehende Installation, sagt das Setup das, schaltet automatische Updates aus und
 lässt die bisherige Version weiterlaufen; neu installiert wird dann am besten am vorgeschlagenen Ort im Profil.
 In der Registry schreibt das Setup nur unter `HKCU`: den Eintrag unter „Apps“ (`…\CurrentVersion\Uninstall\WidgetTea`),

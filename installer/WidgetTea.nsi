@@ -830,13 +830,59 @@ Function CheckOneParent
   Pop $0
 FunctionEnd
 
+; Der echte Pfad eines Ordners, wie Windows ihn nach allen Umleitungen eines Laufwerks auflöst (subst, Netzlaufwerk).
+; $R1 = Ordner; Ergebnis in $R6 ohne das Präfix \\?\ (bei Freigaben \\server\freigabe\…) und ohne \ am Ende, leer, wenn
+; er sich nicht bestimmen lässt.
+Function FinalPath
+  Push $0
+  Push $1
+  Push $2
+  StrCpy $R6 ""
+  StrCpy $1 "$R1"
+  StrCpy $2 $1 "" -1
+  ${If} $2 == ":"                   ; "X:" allein meinte den aktuellen Ordner auf X:
+    StrCpy $1 "$1\"
+  ${EndIf}
+  ; 0x80 = FILE_READ_ATTRIBUTES; 7 = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE; 3 = OPEN_EXISTING;
+  ; 0x02000000 = FILE_FLAG_BACKUP_SEMANTICS, ohne die sich kein Ordner öffnen lässt
+  System::Call 'kernel32::CreateFileW(w r1, i 0x80, i 7, p 0, i 3, i 0x02000000, p 0) p .r0'
+  ${If} $0 != 0
+  ${AndIf} $0 != -1                 ; INVALID_HANDLE_VALUE
+    ; 0 = FILE_NAME_NORMALIZED | VOLUME_NAME_DOS
+    System::Call 'kernel32::GetFinalPathNameByHandleW(p r0, w .r1, i ${NSIS_MAX_STRLEN}, i 0) i .r2'
+    System::Call 'kernel32::CloseHandle(p r0)'
+    ${If} $2 > 0
+    ${AndIf} $2 < ${NSIS_MAX_STRLEN}
+      StrCpy $2 $1 8
+      ${If} $2 == "\\?\UNC\"
+        StrCpy $R6 $1 "" 8
+        StrCpy $R6 "\\$R6"
+      ${Else}
+        StrCpy $2 $1 4
+        ${If} $2 == "\\?\"
+          StrCpy $R6 $1 "" 4
+        ${EndIf}
+      ${EndIf}
+      StrCpy $2 $R6 "" -1
+      ${If} $2 == "\"
+        StrCpy $R6 $R6 -1
+      ${EndIf}
+    ${EndIf}
+  ${EndIf}
+  Pop $2
+  Pop $1
+  Pop $0
+FunctionEnd
+
 ; Prüft alle Ordner über $INSTDIR bis zur Wurzel (Laufwerk oder Freigabe). $R2 = SID des Benutzers. Ergebnis in $R0:
 ; leer, wenn alle passen, sonst der erste Ordner, der nicht passt, und der Grund.
+; Ein Laufwerk von subst oder ein Netzlaufwerk auf einen Unterordner einer Freigabe beginnt an einem gewöhnlichen
+; Ordner. Wer den löschen darf, und die Ordner über ihm sähe die Prüfung entlang des angegebenen Pfads nie (Issue 56).
+; Deshalb prüft sie danach auch die Ordner über dem echten Pfad, wenn der ein anderer ist.
 Function CheckParentDirs
   Push $R1
-  Push $R3
-  Push $R4
-  Push $R5
+  Push $R6
+  Push $R7
   StrCpy $R0 ""
   ${GetParent} "$INSTDIR" $R1
   ${If} $R2 == ""
@@ -844,6 +890,34 @@ Function CheckParentDirs
   ${ElseIfNot} ${FileExists} "$R1\*.*"
     StrCpy $R0 "$R1$\r$\n(Den Ordner gibt es nicht. Das Setup legt keine Ordner dazwischen an: Sie erbten die Rechte darüber.)"
   ${EndIf}
+  StrCpy $R7 $R1
+  ${If} $R0 == ""
+    Call CheckParentChain
+  ${EndIf}
+  ${If} $R0 == ""
+    StrCpy $R1 $R7
+    Call FinalPath
+    ${If} $R6 != ""
+    ${AndIf} $R6 != $R7               ; der Vergleich von LogicLib achtet nicht auf Groß- und Kleinschreibung
+      StrCpy $R1 $R6
+      Call CheckParentChain
+      ${If} $R0 != ""
+        StrCpy $R0 "$R0$\r$\n(Erreicht über $R7, das auf $R6 verweist, etwa ein Laufwerk von subst oder ein Netzlaufwerk.)"
+      ${EndIf}
+    ${EndIf}
+  ${EndIf}
+  Pop $R7
+  Pop $R6
+  Pop $R1
+FunctionEnd
+
+; Prüft $R1 und jeden Ordner darüber bis zur Wurzel mit CheckOneParent. $R2 = SID des Benutzers; erwartet $R0 leer.
+; Ergebnis in $R0 wie bei CheckParentDirs.
+Function CheckParentChain
+  Push $R1
+  Push $R3
+  Push $R4
+  Push $R5
   ${Do}
     ${If} $R0 != ""
     ${OrIf} $R1 == ""
