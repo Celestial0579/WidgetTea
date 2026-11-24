@@ -15,7 +15,7 @@
          Tray-Symbol), und WPF richtet sich nach dem Manifest. -->
     <NoWarn>$(NoWarn);WFO0003</NoWarn>
 
-    <Version>1.1.4</Version>
+    <Version>1.1.5</Version>
     <Product>WidgetTea</Product>
     <!-- Erscheint als „Dateibeschreibung“ in den Eigenschaften der EXE und im Task-Manager. -->
     <AssemblyTitle>WidgetTea – Gitea-Contributions auf dem Desktop</AssemblyTitle>
