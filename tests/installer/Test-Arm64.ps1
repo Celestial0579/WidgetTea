@@ -42,12 +42,10 @@ $root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $version = $proj.Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1
 $setup = Join-Path $root "artifacts\$version\WidgetTea-$version-setup.exe"
 $logs = Join-Path $root 'artifacts\test-logs'
-# In der CI liegt der Arbeitsordner, und mit ihm der Installationsordner, außerhalb jedes Profils. Dort prüft das Setup
-# auch jeden Ordner darüber (GHSA-39vg-vcch-v4vj) und lehnt ab, was der Runner unter RUNNER_TEMP vorgibt. Wie in
-# tests\installer\Test-Installer.ps1 liegt er deshalb direkt unter der Laufwerkswurzel und bekommt feste Rechte.
-# Sonst liegt er unter %TEMP%.
-$outsideProfile = [bool]$env:RUNNER_TEMP
-$work = Join-Path $(if ($outsideProfile) { "$env:SystemDrive\" } else { $env:TEMP }) 'widgettea-arm64'
+# Der Arbeitsordner, und mit ihm der Installationsordner, liegt im Profil. Außerhalb prüft das Setup auch jeden Ordner
+# darüber (GHSA-39vg-vcch-v4vj). Es ist dasselbe x86-Setup wie auf x64, und dort prüfen Test-Installer.ps1 und
+# Test-SelfUpdate.ps1 diesen Weg. Was auf dem ARM64-Runner dabei anders ist, zeigt Show-ClosedDirDiagnosis.
+$work = Join-Path $env:LOCALAPPDATA 'widgettea-arm64'
 $target = Join-Path $work 'installiert'
 $setupLog = Join-Path ([System.IO.Path]::GetTempPath()) 'WidgetTea-Setup.log'   # schreibt das Setup bei einem stillen Abbruch
 $regKey = 'HKCU:\Software\Celestial0579\WidgetTea'
@@ -57,33 +55,59 @@ $armDesktop = Join-Path $env:ProgramFiles 'dotnet\shared\Microsoft.WindowsDeskto
 if (-not (Test-Path $setup)) { throw "Setup fehlt: $setup – erst build\release.ps1 laufen lassen." }
 if (((Test-Path $regKey) -or (Test-Path 'HKCU:\Software\WidgetTea')) -and -not $Force) { throw "WidgetTea ist auf diesem Rechner schon installiert ($regKey). Abbruch." }
 # Vollzugriff nur für den Benutzer, SYSTEM und die Administratoren, nichts geerbt; wie in Test-Installer.ps1.
+# Auf dem ARM64-Runner lehnte das Setup einen so vorbereiteten Ordner ab, weil Authenticated Users ihn ändern durfte.
+# Deshalb entfernt der Helfer nach icacls jeden Eintrag eines anderen Kontos einzeln, und zum Schluss muss die Liste
+# genau so aussehen. Musste er etwas entfernen, stehen im Protokoll die Rechte beim Anlegen und nach icacls.
 function New-ClosedDir([string]$Path) {
     New-Item -ItemType Directory -Force $Path | Out-Null
     $me = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-    & "$env:SystemRoot\System32\icacls.exe" $Path /inheritance:r /grant:r "*${me}:(OI)(CI)F" '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' /Q | Out-Null
+    $keep = @($me, 'S-1-5-18', 'S-1-5-32-544')
+    $sidType = [System.Security.Principal.SecurityIdentifier]
+    $icacls = "$env:SystemRoot\System32\icacls.exe"
+    $created = (Get-Acl -LiteralPath $Path).Sddl
+    & $icacls $Path /inheritance:r /grant:r "*${me}:(OI)(CI)F" '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' /Q | Out-Null
     if ($LASTEXITCODE) { throw "icacls /grant:r für $Path fehlgeschlagen ($LASTEXITCODE)" }
+    $afterIcacls = Get-Acl -LiteralPath $Path
+    $others = @($afterIcacls.GetAccessRules($true, $true, $sidType) |
+        ForEach-Object { $_.IdentityReference.Value } | Where-Object { $_ -notin $keep } | Select-Object -Unique)
+    foreach ($sid in $others) {
+        & $icacls $Path /remove "*$sid" /Q | Out-Null
+        if ($LASTEXITCODE) { throw "icacls /remove für $sid an $Path fehlgeschlagen ($LASTEXITCODE)" }
+    }
+    if ($others.Count) { Write-Host "  ${Path}: Einträge anderer Konten entfernt ($($others -join ', ')); angelegt mit $created, nach icacls $($afterIcacls.Sddl)" }
+    $acl = Get-Acl -LiteralPath $Path
+    $left = @($acl.GetAccessRules($true, $true, $sidType) | Where-Object { $_.IdentityReference.Value -notin $keep })
+    if (-not $acl.AreAccessRulesProtected -or $left.Count) { throw "$Path hat nicht die festen Rechte: $($acl.Sddl)" }
+}
+
+# Nur zur Diagnose, das Ergebnis der Prüfung hängt nicht davon ab, und sie bricht nie ab: Auf dem ARM64-Runner
+# (Windows 11 26200) lehnte das Setup einen mit New-ClosedDir geschlossenen Ordner direkt unter C:\ ab, weil
+# Authenticated Users ihn ändern durfte. Auf x64 und auf einem Windows 11 x64 (26100) nimmt es denselben Ordner an.
+# Hier entsteht ein solcher Ordner samt Unterordner, und die Rechte von Unterordner, Ordner und Wurzel stehen im
+# Protokoll, die des Ordners zwei Sekunden später noch einmal (so lange lag er vor dem Setup). Das Setup läuft nicht
+# dagegen.
+function Show-ClosedDirDiagnosis {
+    $dir = Join-Path "$env:SystemDrive\" 'widgettea-arm64-diagnose'
+    $sub = Join-Path $dir 'installiert'
+    Write-Host "`n== Diagnose: geschlossener Ordner außerhalb des Profils (ohne Einfluss auf das Ergebnis)" -ForegroundColor Cyan
+    try {
+        Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
+        try { New-ClosedDir $dir } catch { Write-Host "  New-ClosedDir: $($_.Exception.Message)" }
+        if (Test-Path -LiteralPath $dir) {
+            New-Item -ItemType Directory -Force $sub | Out-Null
+            foreach ($p in $sub, $dir, "$env:SystemDrive\") { Write-Host "  SDDL von ${p}: $((Get-Acl -LiteralPath $p).Sddl)" }
+            Start-Sleep -Seconds 2
+            Write-Host "  SDDL von $dir nach 2 s: $((Get-Acl -LiteralPath $dir).Sddl)"
+            Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    } catch {
+        Write-Host "  Diagnose abgebrochen: $($_.Exception.Message)"
+    }
 }
 
 Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
-if ($outsideProfile) {
-    New-ClosedDir $work
-    # Die Rechte der Wurzel stehen im Protokoll: Lehnt das Setup sie als Ordner darüber ab, zeigt sich hier, warum.
-    Write-Host "Arbeitsordner außerhalb des Profils: $work, darüber $env:SystemDrive\"
-    & "$env:SystemRoot\System32\icacls.exe" "$env:SystemDrive\" | ForEach-Object { Write-Host "  $_" }
-    # Als Besitzer eines Ordners darüber nimmt das Setup nur den Benutzer, SYSTEM, die Administratoren und
-    # TrustedInstaller an. Wem gehören Wurzel und Arbeitsordner, und als wer läuft das Setup?
-    foreach ($dir in "$env:SystemDrive\", $work) {
-        $acl = Get-Acl -LiteralPath $dir
-        $name = '?'
-        try { $name = $acl.GetOwner([System.Security.Principal.NTAccount]).Value } catch { }
-        Write-Host "  Besitzer von ${dir}: $name ($($acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value))"
-    }
-    # Derselbe Aufruf, mit dem das Setup das eigene Konto bestimmt.
-    & "$env:SystemRoot\System32\whoami.exe" /user /fo csv /nh | ForEach-Object { Write-Host "  whoami: $_" }
-    $principal = [System.Security.Principal.WindowsPrincipal][System.Security.Principal.WindowsIdentity]::GetCurrent()
-    Write-Host "  Mit Administrator-Token: $($principal.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator))"
-}
 New-Item -ItemType Directory -Force $work, $logs | Out-Null
+if ($env:CI -eq 'true') { Show-ClosedDirDiagnosis }
 
 $script:stage = ''
 function Step([string]$text) { $script:stage = $text; Write-Host "`n== $text" -ForegroundColor Cyan }
