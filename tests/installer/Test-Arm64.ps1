@@ -49,6 +49,7 @@ $logs = Join-Path $root 'artifacts\test-logs'
 $outsideProfile = [bool]$env:RUNNER_TEMP
 $work = Join-Path $(if ($outsideProfile) { "$env:SystemDrive\" } else { $env:TEMP }) 'widgettea-arm64'
 $target = Join-Path $work 'installiert'
+$setupLog = Join-Path ([System.IO.Path]::GetTempPath()) 'WidgetTea-Setup.log'   # schreibt das Setup bei einem stillen Abbruch
 $regKey = 'HKCU:\Software\Celestial0579\WidgetTea'
 $x64Desktop = Join-Path $env:ProgramFiles 'dotnet\x64\shared\Microsoft.WindowsDesktop.App'
 $armDesktop = Join-Path $env:ProgramFiles 'dotnet\shared\Microsoft.WindowsDesktop.App'
@@ -69,6 +70,18 @@ if ($outsideProfile) {
     # Die Rechte der Wurzel stehen im Protokoll: Lehnt das Setup sie als Ordner darüber ab, zeigt sich hier, warum.
     Write-Host "Arbeitsordner außerhalb des Profils: $work, darüber $env:SystemDrive\"
     & "$env:SystemRoot\System32\icacls.exe" "$env:SystemDrive\" | ForEach-Object { Write-Host "  $_" }
+    # Als Besitzer eines Ordners darüber nimmt das Setup nur den Benutzer, SYSTEM, die Administratoren und
+    # TrustedInstaller an. Wem gehören Wurzel und Arbeitsordner, und als wer läuft das Setup?
+    foreach ($dir in "$env:SystemDrive\", $work) {
+        $acl = Get-Acl -LiteralPath $dir
+        $name = '?'
+        try { $name = $acl.GetOwner([System.Security.Principal.NTAccount]).Value } catch { }
+        Write-Host "  Besitzer von ${dir}: $name ($($acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value))"
+    }
+    # Derselbe Aufruf, mit dem das Setup das eigene Konto bestimmt.
+    & "$env:SystemRoot\System32\whoami.exe" /user /fo csv /nh | ForEach-Object { Write-Host "  whoami: $_" }
+    $principal = [System.Security.Principal.WindowsPrincipal][System.Security.Principal.WindowsIdentity]::GetCurrent()
+    Write-Host "  Mit Administrator-Token: $($principal.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator))"
 }
 New-Item -ItemType Directory -Force $work, $logs | Out-Null
 
@@ -90,7 +103,13 @@ function Get-Patch([string]$Folder) {
 }
 
 function Invoke-SetupSilently([string]$Exe) {
+    Remove-Item -LiteralPath $setupLog -ErrorAction SilentlyContinue
     $p = Start-Process -FilePath $Exe -ArgumentList '/S', "/D=$target" -PassThru -Wait
+    # Bricht das Setup still ab, steht der Grund in seinem Protokoll.
+    if (Test-Path -LiteralPath $setupLog) {
+        Get-Content -LiteralPath $setupLog | ForEach-Object { Write-Host "  Setup: $_" }
+        Copy-Item -LiteralPath $setupLog -Destination (Join-Path $logs 'setup-abbruch.log') -Force
+    }
     $p.ExitCode
 }
 
