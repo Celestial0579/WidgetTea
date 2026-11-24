@@ -79,6 +79,9 @@ RequestExecutionLevel user
 ; Leere Merkerdatei: Das Setup hat die Updates ausgeschaltet. Sie liegt neben den Einstellungen und nicht in
 ; der Registry, damit sie eine Deinstallation genau dann überlebt, wenn die Einstellungen es auch tun.
 !define PAUSEDFILE   "$LOCALAPPDATA\${APPNAME}\autoupdate-paused"
+; Bricht das Setup im stillen Modus (/S) ab, sieht niemand die Meldung. Dann steht sie hier, etwa für die CI oder ein
+; Verteilungsskript. Der Temp-Ordner gehört dem Benutzer; die Datei wird bei jedem stillen Abbruch neu geschrieben.
+!define SETUPLOG     "$TEMP\${APPNAME}-Setup.log"
 
 ; Benötigte .NET-Laufzeit (WPF/WinForms → Desktop Runtime). Die Mindest-Patchversion enthält die
 ; vorausgesetzten Sicherheitskorrekturen; bei neuen kritischen .NET-Patches anheben.
@@ -128,6 +131,7 @@ VIAddVersionKey /LANG=1031 "LegalCopyright" "© 2026 Tim Heyne – MIT-Lizenz"
 
 Var Restart
 Var OrdnerUmgestellt   ; 1, sobald Besitz und Rechte des Installationsordners selbst umgestellt sind
+Var Meldung            ; Text eines Abbruchs, für ShowRefusal und LogSilent
 
 ; ---------- Oberfläche ----------
 !define MUI_ICON "${ICON}"
@@ -465,18 +469,43 @@ Function RemovePreviousPayload
   FileClose $R0
 FunctionEnd
 
+; Abbruch mit der Meldung in $Meldung. Im stillen Modus erscheint kein Fenster; dann steht sie in ${SETUPLOG}.
+Function ShowRefusal
+  Call LogSilent
+  MessageBox MB_OK|MB_ICONSTOP "$Meldung" /SD IDOK
+FunctionEnd
+
+; Schreibt im stillen Modus $Meldung nach ${SETUPLOG}: dasselbe, was sonst im Fenster stünde, und den
+; Installationsordner. Eine vorhandene Datei wird vorher gelöscht; ein Verweis an ihrer Stelle verschwindet so,
+; statt dass das Setup ihm folgt.
+Function LogSilent
+  ${If} ${Silent}
+    Push $0
+    Delete "${SETUPLOG}"
+    ClearErrors
+    FileOpen $0 "${SETUPLOG}" w
+    ${IfNot} ${Errors}
+      FileWriteUTF16LE /BOM $0 "${APPNAME} ${VERSION}: Setup abgebrochen$\r$\nInstallationsordner: $INSTDIR$\r$\n$\r$\n$Meldung$\r$\n"
+      FileClose $0
+    ${EndIf}
+    Pop $0
+  ${EndIf}
+FunctionEnd
+
 Function .onInit
   ; Arbeitsordner auf den Systemordner stellen. Nach einem Doppelklick ist es der Ordner der Setup-Datei, und
   ; alles, was das Setup startet, erbte ihn samt dem, was dort sonst noch liegt.
   SetOutPath "$SYSDIR"
 
   ${IfNot} ${AtLeastWin10}
-    MessageBox MB_OK|MB_ICONSTOP "WidgetTea benötigt Windows 10 oder neuer." /SD IDOK
+    StrCpy $Meldung "WidgetTea benötigt Windows 10 oder neuer."
+    Call ShowRefusal
     Abort
   ${EndIf}
   ${IfNot} ${IsNativeAMD64}
   ${AndIfNot} ${IsNativeARM64}
-    MessageBox MB_OK|MB_ICONSTOP "WidgetTea benötigt ein 64-Bit-Windows." /SD IDOK
+    StrCpy $Meldung "WidgetTea benötigt ein 64-Bit-Windows."
+    Call ShowRefusal
     Abort
   ${EndIf}
 
@@ -861,6 +890,8 @@ Function RefuseUpdateHere
   Call LaunchApp
   StrCpy $Restart 0                 ; .onInstFailed soll die App nicht noch einmal starten
   StrCpy $R5 "Das Update auf ${APPNAME} ${VERSION} lässt sich an diesem Ort nicht installieren:$\r$\n$INSTDIR$\r$\n$\r$\nEin Ordner darüber erlaubt anderen Konten Änderungen, die das Setup für den Installationsordner nicht zulässt:$\r$\n$R0$\r$\n$\r$\n${APPNAME} bleibt in der bisherigen Version installiert und läuft wieder; „Updates automatisch installieren“ ist ausgeschaltet. Bitte ${APPNAME} neu installieren und dabei den vorgeschlagenen Ort im eigenen Benutzerprofil wählen ($LOCALAPPDATA\Programs\${APPNAME}). Den bisherigen Ordner kann man danach löschen."
+  StrCpy $Meldung $R5
+  Call LogSilent
   Push $R5
   Push 0x00051030              ; MB_OK | MB_ICONEXCLAMATION | MB_SYSTEMMODAL | MB_SETFOREGROUND | MB_TOPMOST
   Push 0                       ; ohne Zeitablauf
@@ -951,7 +982,8 @@ Function SecureInstDir
       ${AndIf} ${FileExists} "$INSTDIR\${EXENAME}"
         Call RefuseUpdateHere
       ${Else}
-        MessageBox MB_OK|MB_ICONSTOP "Ein Ordner über dem Installationsordner ist nicht sicher:$\r$\n$R0$\r$\n$\r$\nEin anderes Konto könnte den Installationsordner samt Programm sonst gegen einen eigenen austauschen. Es wurde nichts angelegt oder geändert. Bitte einen Ordner im eigenen Benutzerprofil wählen oder einen direkt in einem Ordner, den nur du und die Administratoren ändern dürfen." /SD IDOK
+        StrCpy $Meldung "Ein Ordner über dem Installationsordner ist nicht sicher:$\r$\n$R0$\r$\n$\r$\nEin anderes Konto könnte den Installationsordner samt Programm sonst gegen einen eigenen austauschen. Es wurde nichts angelegt oder geändert. Bitte einen Ordner im eigenen Benutzerprofil wählen oder einen direkt in einem Ordner, den nur du und die Administratoren ändern dürfen."
+        Call ShowRefusal
       ${EndIf}
       Pop $R4
       Pop $R3
@@ -964,7 +996,8 @@ Function SecureInstDir
     ; Liegt ein Verweis im Ordner, bliebe er sonst halb umgestellt (Issue 52).
     Call FindReparsePoint
     ${If} $R0 != ""
-      MessageBox MB_OK|MB_ICONSTOP "Im Installationsordner liegt ein Verweis auf einen anderen Ort (Junction oder symbolischer Link) oder etwas, das das Setup nicht lesen kann:$\r$\n$R0$\r$\n$\r$\nAm Ordner wurde nichts geändert. Bitte einen leeren Ordner wählen oder einen im eigenen Benutzerprofil." /SD IDOK
+      StrCpy $Meldung "Im Installationsordner liegt ein Verweis auf einen anderen Ort (Junction oder symbolischer Link) oder etwas, das das Setup nicht lesen kann:$\r$\n$R0$\r$\n$\r$\nAm Ordner wurde nichts geändert. Bitte einen leeren Ordner wählen oder einen im eigenen Benutzerprofil."
+      Call ShowRefusal
       Pop $R4
       Pop $R3
       Pop $R2
@@ -1012,7 +1045,8 @@ Function SecureInstDir
       ${If} $OrdnerUmgestellt == 1
         StrCpy $R1 "Besitz und Rechte des Ordners selbst sind schon auf dich umgestellt, sein Inhalt nur zum Teil.$\r$\n$\r$\n$R1"
       ${EndIf}
-      MessageBox MB_OK|MB_ICONSTOP "Die Rechte des Installationsordners ließen sich nicht auf dich beschränken:$\r$\n$INSTDIR$\r$\n$\r$\n$R1" /SD IDOK
+      StrCpy $Meldung "Die Rechte des Installationsordners ließen sich nicht auf dich beschränken:$\r$\n$INSTDIR$\r$\n$\r$\n$R1"
+      Call ShowRefusal
       Pop $R4
       Pop $R3
       Pop $R2

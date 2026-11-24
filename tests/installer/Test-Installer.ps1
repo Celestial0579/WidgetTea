@@ -101,11 +101,28 @@ if (((Test-Path $regKey) -or (Test-Path $oldRegKey)) -and -not $Force) { throw "
 # Besitzer ist, wer ihn anlegt: der Benutzer, mit Administrator-Token die Gruppe der Administratoren; beides nimmt das
 # Setup an. Über icacls, nicht Set-Acl: Set-Acl schriebe mit eingeschränktem Token auch die SACL und scheiterte an
 # SeSecurityPrivilege.
+# Auf dem ARM64-Runner lehnte das Setup einen so vorbereiteten Ordner ab, weil Authenticated Users ihn ändern durfte.
+# Deshalb entfernt der Helfer nach icacls jeden Eintrag eines anderen Kontos einzeln, und zum Schluss muss die Liste
+# genau so aussehen. Musste er etwas entfernen, stehen im Protokoll die Rechte beim Anlegen und nach icacls.
 function New-ClosedDir([string]$Path) {
     New-Item -ItemType Directory -Force $Path | Out-Null
+    $keep = @($me, 'S-1-5-18', 'S-1-5-32-544')
+    $sidType = [System.Security.Principal.SecurityIdentifier]
     $icacls = "$env:SystemRoot\System32\icacls.exe"
+    $created = (Get-Acl -LiteralPath $Path).Sddl
     & $icacls $Path /inheritance:r /grant:r "*${me}:(OI)(CI)F" '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' /Q | Out-Null
     if ($LASTEXITCODE) { throw "icacls /grant:r für $Path fehlgeschlagen ($LASTEXITCODE)" }
+    $afterIcacls = Get-Acl -LiteralPath $Path
+    $others = @($afterIcacls.GetAccessRules($true, $true, $sidType) |
+        ForEach-Object { $_.IdentityReference.Value } | Where-Object { $_ -notin $keep } | Select-Object -Unique)
+    foreach ($sid in $others) {
+        & $icacls $Path /remove "*$sid" /Q | Out-Null
+        if ($LASTEXITCODE) { throw "icacls /remove für $sid an $Path fehlgeschlagen ($LASTEXITCODE)" }
+    }
+    if ($others.Count) { Write-Host "  ${Path}: Einträge anderer Konten entfernt ($($others -join ', ')); angelegt mit $created, nach icacls $($afterIcacls.Sddl)" }
+    $acl = Get-Acl -LiteralPath $Path
+    $left = @($acl.GetAccessRules($true, $true, $sidType) | Where-Object { $_.IdentityReference.Value -notin $keep })
+    if (-not $acl.AreAccessRulesProtected -or $left.Count) { throw "$Path hat nicht die festen Rechte: $($acl.Sddl)" }
 }
 
 Remove-Item -Recurse -Force $work, $logs -ErrorAction SilentlyContinue
