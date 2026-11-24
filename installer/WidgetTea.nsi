@@ -556,13 +556,24 @@ FunctionEnd
 
 Function DirectoryLeave
   Push $R0
+  Push $R2
   Call IsOutsideProfile
   ${If} $R0 == 1
+    Call CurrentUserSid
+    Call CheckParentDirs              ; dieselbe Prüfung wie SecureInstDir, nur schon hier (GHSA-39vg-vcch-v4vj)
+    ${If} $R0 != ""
+      MessageBox MB_OK|MB_ICONSTOP "Ein Ordner über diesem Installationsordner ist nicht sicher:$\r$\n$R0$\r$\n$\r$\nEin anderes Konto könnte den Installationsordner samt Programm sonst gegen einen eigenen austauschen. Bitte einen Ordner im eigenen Benutzerprofil wählen oder einen direkt in einem Ordner, den nur du und die Administratoren ändern dürfen."
+      Pop $R2
+      Pop $R0
+      Abort
+    ${EndIf}
     MessageBox MB_YESNO|MB_ICONEXCLAMATION "Der Ordner liegt außerhalb deines Benutzerprofils.$\r$\n$\r$\nDas Setup macht dich zum Besitzer des Ordners und von allem darin und beschränkt die Rechte auf dich, damit kein anderer Benutzer die Programmdateien austauschen kann. Was ein anderer dort schon abgelegt hat, bleibt aber liegen. Am sichersten ist ein neuer, leerer Ordner.$\r$\n$\r$\nTrotzdem dorthin installieren?" IDYES ok
+    Pop $R2
     Pop $R0
     Abort
   ok:
   ${EndIf}
+  Pop $R2
   Pop $R0
 FunctionEnd
 
@@ -662,6 +673,207 @@ Function ProtectInstDir
   Pop $R3
 FunctionEnd
 
+; ---------- Ordner über dem Installationsordner (GHSA-39vg-vcch-v4vj) ----------
+; ProtectInstDir schützt außerhalb des Profils nur den Installationsordner selbst. Gehört ein Ordner darüber einem
+; anderen Konto, oder darf ein anderes Konto ihn umbenennen, darin löschen oder seine Rechte oder seinen Besitzer
+; ändern, kann es den geschützten Ordner samt Programm gegen einen eigenen austauschen; der Autostart führte dessen
+; WidgetTea.exe dann mit den Rechten des Benutzers aus. Ein Ordner darüber, der ein Verweis ist, führt an einen Ort,
+; den das Setup nicht prüft. Darum prüft es jeden Ordner bis zur Laufwerkswurzel, bevor es etwas anlegt oder ändert:
+; Er muss existieren (ein Zwischenordner erbte die Rechte darüber), darf kein Verweis sein und muss dem Benutzer,
+; SYSTEM, den Administratoren oder TrustedInstaller gehören. Kein anderes Konto darf ihn löschen oder umbenennen (an
+; der Wurzel geht das ohnehin nicht), darin löschen oder seine Rechte oder seinen Besitzer ändern.
+!define SID_TRUSTEDINSTALLER "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464"
+!define RECHTE_GEFAEHRLICH 0x100C0040   ; FILE_DELETE_CHILD | WRITE_DAC | WRITE_OWNER | GENERIC_ALL
+!define RECHT_LOESCHEN     0x00010000   ; DELETE
+
+; Prüft einen Ordner darüber. $R1 = Ordner, $R3 = 1 an der Wurzel, $R2 = SID des Benutzers. Ergebnis in $R0: leer,
+; wenn er passt, sonst Ordner und Grund. Was sich nicht lesen lässt, gilt als nicht sicher.
+Function CheckOneParent
+  Push $0
+  Push $1
+  Push $2
+  Push $3
+  Push $4
+  Push $5
+  Push $6
+  Push $7
+  Push $8
+  Push $9
+  StrCpy $R0 ""
+  System::Call 'kernel32::GetFileAttributesW(w R1) i .r0'
+  IntOp $1 $0 & 0x400               ; FILE_ATTRIBUTE_REPARSE_POINT
+  IntOp $2 $0 & 0x10                ; FILE_ATTRIBUTE_DIRECTORY
+  ${If} $0 = -1
+    StrCpy $R0 "$R1$\r$\n(Das Setup kann ihn nicht lesen.)"
+  ${ElseIf} $1 <> 0
+    StrCpy $R0 "$R1$\r$\n(Er ist ein Verweis auf einen anderen Ort, eine Junction oder ein symbolischer Link.)"
+  ${ElseIf} $2 = 0
+    StrCpy $R0 "$R1$\r$\n(Er ist kein Ordner.)"
+  ${Else}
+    StrCpy $1 0
+    StrCpy $2 0
+    StrCpy $3 0
+    ; 1 = SE_FILE_OBJECT; 5 = OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION
+    System::Call 'advapi32::GetNamedSecurityInfoW(w R1, i 1, i 5, *p .r1, p 0, *p .r2, p 0, *p .r3) i .r0'
+    ${If} $0 <> 0
+    ${OrIf} $3 = 0
+      StrCpy $R0 "$R1$\r$\n(Das Setup kann Besitzer und Rechte nicht lesen.)"
+    ${Else}
+      StrCpy $5 ""
+      System::Call 'advapi32::ConvertSidToStringSidW(p r1, *p .r4) i .r0'
+      ${If} $0 <> 0
+        System::Call 'kernel32::lstrcpynW(w .r5, p r4, i 256)'
+        System::Call 'kernel32::LocalFree(p r4)'
+      ${EndIf}
+      ${If} $5 != $R2
+      ${AndIf} $5 != "S-1-5-18"
+      ${AndIf} $5 != "S-1-5-32-544"
+      ${AndIf} $5 != "${SID_TRUSTEDINSTALLER}"
+        StrCpy $R0 "$R1$\r$\n(Er gehört einem anderen Konto: $5)"
+      ${EndIf}
+      ${If} $R0 == ""
+      ${AndIf} $2 = 0
+        StrCpy $R0 "$R1$\r$\n(Er hat keine Rechteliste, damit darf jedes Konto alles.)"
+      ${EndIf}
+      ${If} $R0 == ""
+        IntOp $6 ${RECHTE_GEFAEHRLICH} + 0
+        ${If} $R3 <> 1
+          IntOp $6 $6 | ${RECHT_LOESCHEN}
+        ${EndIf}
+        StrCpy $7 0
+        System::Call '*(i 0, i 0, i 0) p .r4'
+        System::Call 'advapi32::GetAclInformation(p r2, p r4, i 12, i 2) i .r0'   ; 2 = AclSizeInformation
+        ${If} $0 <> 0
+          System::Call '*$4(i .r7)'     ; AceCount
+        ${Else}
+          StrCpy $R0 "$R1$\r$\n(Das Setup kann die Rechte nicht lesen.)"
+        ${EndIf}
+        System::Free $4
+        StrCpy $8 0
+        ${DoWhile} $8 < $7
+          ${If} $R0 != ""
+            ${Break}
+          ${EndIf}
+          System::Call 'advapi32::GetAce(p r2, i r8, *p .r9) i .r0'
+          ${If} $0 = 0
+            StrCpy $R0 "$R1$\r$\n(Das Setup kann die Rechte nicht lesen.)"
+            ${Break}
+          ${EndIf}
+          ; ACE_HEADER: Typ und Flags je ein Byte, die Größe ein Wort; danach die Rechte, ab Byte 8 die SID
+          System::Call '*$9(&i1 .r0, &i1 .r1, &i2, i .r4)'
+          IntOp $1 $1 & 0x8             ; INHERIT_ONLY_ACE: gilt nur für Neues darin, nicht für den Ordner selbst
+          IntOp $4 $4 & $6
+          ${If} $0 = 0                  ; ACCESS_ALLOWED_ACE_TYPE
+          ${OrIf} $0 = 9                ; ACCESS_ALLOWED_CALLBACK_ACE_TYPE
+            ${If} $1 = 0
+            ${AndIf} $4 <> 0
+              IntPtrOp $9 $9 + 8
+              StrCpy $5 ""
+              System::Call 'advapi32::ConvertSidToStringSidW(p r9, *p .r1) i .r0'
+              ${If} $0 <> 0
+                System::Call 'kernel32::lstrcpynW(w .r5, p r1, i 256)'
+                System::Call 'kernel32::LocalFree(p r1)'
+              ${EndIf}
+              ${If} $5 != $R2
+              ${AndIf} $5 != "S-1-5-18"
+              ${AndIf} $5 != "S-1-5-32-544"
+              ${AndIf} $5 != "${SID_TRUSTEDINSTALLER}"
+              ${AndIf} $5 != "S-1-3-4"  ; OWNER RIGHTS: der Besitzer, oben geprüft
+                StrCpy $R0 "$R1$\r$\n(Ein anderes Konto darf ihn umbenennen, darin löschen oder seine Rechte ändern: $5)"
+              ${EndIf}
+            ${EndIf}
+          ${EndIf}
+          IntOp $8 $8 + 1
+        ${Loop}
+      ${EndIf}
+      System::Call 'kernel32::LocalFree(p r3)'
+    ${EndIf}
+  ${EndIf}
+  Pop $9
+  Pop $8
+  Pop $7
+  Pop $6
+  Pop $5
+  Pop $4
+  Pop $3
+  Pop $2
+  Pop $1
+  Pop $0
+FunctionEnd
+
+; Prüft alle Ordner über $INSTDIR bis zur Wurzel (Laufwerk oder Freigabe). $R2 = SID des Benutzers. Ergebnis in $R0:
+; leer, wenn alle passen, sonst der erste Ordner, der nicht passt, und der Grund.
+Function CheckParentDirs
+  Push $R1
+  Push $R3
+  Push $R4
+  Push $R5
+  StrCpy $R0 ""
+  ${GetParent} "$INSTDIR" $R1
+  ${If} $R2 == ""
+    StrCpy $R0 "$INSTDIR$\r$\n(Das Setup konnte das eigene Konto nicht bestimmen.)"
+  ${ElseIfNot} ${FileExists} "$R1\*.*"
+    StrCpy $R0 "$R1$\r$\n(Den Ordner gibt es nicht. Das Setup legt keine Ordner dazwischen an: Sie erbten die Rechte darüber.)"
+  ${EndIf}
+  ${Do}
+    ${If} $R0 != ""
+    ${OrIf} $R1 == ""
+      ${Break}
+    ${EndIf}
+    ${GetParent} "$R1" $R4
+    ; An der Wurzel ist der nächste Ordner leer ("C:") oder nur noch der Server ("\\server" über "\\server\freigabe").
+    StrCpy $R3 0
+    ${If} $R4 == ""
+      StrCpy $R3 1
+    ${Else}
+      StrCpy $R5 $R4 2
+      ${If} $R5 == "\\"
+        ${GetParent} "$R4" $R5
+        ${If} $R5 == ""
+        ${OrIf} $R5 == "\"
+          StrCpy $R3 1
+        ${EndIf}
+      ${EndIf}
+    ${EndIf}
+    ${If} $R3 == 1
+      StrCpy $R1 "$R1\"               ; "C:" allein meinte den aktuellen Ordner auf C:
+    ${EndIf}
+    Call CheckOneParent
+    ${If} $R3 == 1
+      ${Break}
+    ${EndIf}
+    StrCpy $R1 $R4
+  ${Loop}
+  Pop $R5
+  Pop $R4
+  Pop $R3
+  Pop $R1
+FunctionEnd
+
+; Beim Selbst-Update (/S /RESTART) lehnt das Setup einen unsicheren Ordner darüber nicht still ab: Die bisherige
+; Version startet wieder, automatische Updates gehen aus (sonst käme der Hinweis nach jedem Start erneut), und ein
+; Hinweis sagt, wo man neu installiert. Wie UpdateDeclined: erst starten, dann Bescheid sagen. $R0 = Ordner und Grund.
+Function RefuseUpdateHere
+  Push $R3
+  Push $R4
+  Push $R5
+  Call PauseAutoUpdate
+  Call LaunchApp
+  StrCpy $Restart 0                 ; .onInstFailed soll die App nicht noch einmal starten
+  StrCpy $R5 "Das Update auf ${APPNAME} ${VERSION} lässt sich an diesem Ort nicht installieren:$\r$\n$INSTDIR$\r$\n$\r$\nEin Ordner darüber erlaubt anderen Konten Änderungen, die das Setup für den Installationsordner nicht zulässt:$\r$\n$R0$\r$\n$\r$\n${APPNAME} bleibt in der bisherigen Version installiert und läuft wieder; „Updates automatisch installieren“ ist ausgeschaltet. Bitte ${APPNAME} neu installieren und dabei den vorgeschlagenen Ort im eigenen Benutzerprofil wählen ($LOCALAPPDATA\Programs\${APPNAME}). Den bisherigen Ordner kann man danach löschen."
+  Push $R5
+  Push 0x00051030              ; MB_OK | MB_ICONEXCLAMATION | MB_SYSTEMMODAL | MB_SETFOREGROUND | MB_TOPMOST
+  Push 0                       ; ohne Zeitablauf
+  Call DotnetTimedBox
+  Pop $R4
+  ${If} $R4 == 0                ; Fenster ließ sich nicht zeigen: wie bisher
+    MessageBox MB_OK|MB_ICONEXCLAMATION|MB_TOPMOST "$R5"
+  ${EndIf}
+  Pop $R5
+  Pop $R4
+  Pop $R3
+FunctionEnd
+
 ; Sucht unter $INSTDIR, den Ordner selbst eingeschlossen, nach einem Reparse-Punkt (Junction, symbolischer Link,
 ; Bereitstellungspunkt) und steigt in keinen davon hinab. Ein Eintrag, dessen Attribute sich nicht lesen lassen, und ein
 ; Ordner, den das Setup nicht auflisten kann, zählen ebenso: icacls /setowner /T käme durch beides nicht hindurch, und
@@ -730,8 +942,26 @@ Function SecureInstDir
   Push $R4
   Call IsOutsideProfile
   ${If} $R0 == 1
+    ; Erst die Ordner darüber prüfen, dann den Ordner selbst, erst danach ändern. Vorher legt das Setup nichts an:
+    ; Durch einen Verweis darüber landete ein neuer Ordner sonst woanders (GHSA-39vg-vcch-v4vj).
+    Call CurrentUserSid
+    Call CheckParentDirs
+    ${If} $R0 != ""
+      ${If} $Restart == 1
+      ${AndIf} ${FileExists} "$INSTDIR\${EXENAME}"
+        Call RefuseUpdateHere
+      ${Else}
+        MessageBox MB_OK|MB_ICONSTOP "Ein Ordner über dem Installationsordner ist nicht sicher:$\r$\n$R0$\r$\n$\r$\nEin anderes Konto könnte den Installationsordner samt Programm sonst gegen einen eigenen austauschen. Es wurde nichts angelegt oder geändert. Bitte einen Ordner im eigenen Benutzerprofil wählen oder einen direkt in einem Ordner, den nur du und die Administratoren ändern dürfen." /SD IDOK
+      ${EndIf}
+      Pop $R4
+      Pop $R3
+      Pop $R2
+      Pop $R1
+      Pop $R0
+      Abort
+    ${EndIf}
     CreateDirectory "$INSTDIR"
-    ; Erst prüfen, dann ändern: Liegt ein Verweis im Ordner, bliebe er sonst halb umgestellt (Issue 52).
+    ; Liegt ein Verweis im Ordner, bliebe er sonst halb umgestellt (Issue 52).
     Call FindReparsePoint
     ${If} $R0 != ""
       MessageBox MB_OK|MB_ICONSTOP "Im Installationsordner liegt ein Verweis auf einen anderen Ort (Junction oder symbolischer Link) oder etwas, das das Setup nicht lesen kann:$\r$\n$R0$\r$\n$\r$\nAm Ordner wurde nichts geändert. Bitte einen leeren Ordner wählen oder einen im eigenen Benutzerprofil." /SD IDOK
@@ -743,8 +973,7 @@ Function SecureInstDir
       Abort
     ${EndIf}
     StrCpy $OrdnerUmgestellt 0
-    Call CurrentUserSid
-    StrCpy $R0 1                    ; ohne SID gilt es als gescheitert
+    StrCpy $R0 1                    ; ohne SID gilt es als gescheitert (CheckParentDirs hat dann schon abgebrochen)
     ${If} $R2 != ""
       Call ProtectInstDir
     ${EndIf}
