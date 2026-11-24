@@ -1233,9 +1233,14 @@ $singleRights = [ordered]@{
     WO   = 'Besitz übernehmen'                 # WRITE_OWNER
 }
 $singleDirs = @($singleRights.Keys | ForEach-Object { Join-Path $root "widgettea-eltern-nur-$($_.ToLowerInvariant())" })
+$substUnsafe = Join-Path $root 'widgettea-eltern-subst-unsicher'
+$substSafe = Join-Path $root 'widgettea-eltern-subst-sicher'
+$subst = "$env:SystemRoot\System32\subst.exe"
+$substDrive = [char[]](90..68) | Where-Object { -not (Test-Path -LiteralPath "$($_):\") } | Select-Object -First 1
 function Clear-ParentTest {
     Remove-Junction $parentJump
-    foreach ($p in @($closed, $foreignRight, $foreignOwner, $jumpTarget, $missing, $inheritOnly) + $singleDirs) {
+    if ($substDrive) { & $subst "${substDrive}:" /D 2>&1 | Out-Null }
+    foreach ($p in @($closed, $foreignRight, $foreignOwner, $jumpTarget, $missing, $inheritOnly, $substUnsafe, $substSafe) + $singleDirs) {
         if (Test-Path -LiteralPath $p) {
             & "$env:SystemRoot\System32\icacls.exe" $p /setowner "*$me" /T /C /Q 2>&1 | Out-Null
             Remove-Item -LiteralPath $p -Recurse -Force -ErrorAction SilentlyContinue
@@ -1303,6 +1308,47 @@ $before = (Get-Acl -LiteralPath $jumpTarget).Sddl
 Test-Refused $parentJump 'Junction als Ordner darüber'
 Check (-not (Test-Path -LiteralPath (Join-Path $jumpTarget 'WidgetTea'))) 'Junction als Ordner darüber: Am Ziel der Junction ist nichts angelegt'
 Check ((Get-Acl -LiteralPath $jumpTarget).Sddl -eq $before) 'Junction als Ordner darüber: Besitz und Rechte des Ziels unverändert'
+
+# Issue 56. Ein Laufwerk von subst beginnt an einem gewöhnlichen Ordner, nicht an einer echten Wurzel. Entlang des
+# Laufwerks sähe das Setup weder, wer diesen Ordner löschen darf, noch die Ordner über ihm. Es prüft deshalb auch die
+# Ordner über dem echten Pfad. Hier dürfen die angemeldeten Benutzer den Ordner hinter dem Laufwerk ändern. Alle
+# Prüfungen hier gehen über den echten Pfad: Ein Laufwerk, das nach ihrem Start entsteht, kennt PowerShell nicht immer.
+if ($substDrive) {
+    New-ClosedDir $substUnsafe
+    & "$env:SystemRoot\System32\icacls.exe" $substUnsafe /grant '*S-1-5-11:(OI)(CI)M' /Q | Out-Null
+    Check ($LASTEXITCODE -eq 0) 'Laufwerk von subst auf einen unsicheren Ordner: Ausgangslage hergestellt'
+    $inner = Join-Path $substUnsafe 'sicher'
+    New-ClosedDir $inner
+    $before = (Get-Acl -LiteralPath $inner).Sddl
+    & $subst "${substDrive}:" $substUnsafe
+    Check ($LASTEXITCODE -eq 0) "Laufwerk von subst auf einen unsicheren Ordner: ${substDrive}: zeigt auf $substUnsafe"
+    try {
+        $r = Invoke-Setup $setup @('/S', "/D=${substDrive}:\sicher\WidgetTea")
+    } finally {
+        & $subst "${substDrive}:" /D 2>&1 | Out-Null
+    }
+    Check ($r.ExitCode -eq 2) "Laufwerk von subst auf einen unsicheren Ordner: Exitcode 2 (war $($r.ExitCode))"
+    Check (-not (Test-Path -LiteralPath (Join-Path $inner 'WidgetTea'))) 'Laufwerk von subst auf einen unsicheren Ordner: Der Installationsordner ist nicht angelegt'
+    Check ((Get-Acl -LiteralPath $inner).Sddl -eq $before) 'Laufwerk von subst auf einen unsicheren Ordner: Besitz und Rechte des Ordners darüber unverändert'
+
+    # Gegenstück: Hinter dem Laufwerk liegt ein Ordner, den nur der Benutzer, SYSTEM und die Administratoren ändern
+    # dürfen. Dann läuft die Installation durch.
+    New-ClosedDir $substSafe
+    & $subst "${substDrive}:" $substSafe
+    Check ($LASTEXITCODE -eq 0) "Laufwerk von subst auf einen sicheren Ordner: ${substDrive}: zeigt auf $substSafe"
+    try {
+        $r = Invoke-Setup $setup @('/S', "/D=${substDrive}:\WidgetTea")
+    } finally {
+        & $subst "${substDrive}:" /D 2>&1 | Out-Null
+    }
+    $dir = Join-Path $substSafe 'WidgetTea'
+    Check ($r.ExitCode -eq 0) "Laufwerk von subst auf einen sicheren Ordner: Exitcode 0 (war $($r.ExitCode))"
+    Check (Test-Path -LiteralPath (Join-Path $dir 'WidgetTea.exe')) 'Laufwerk von subst auf einen sicheren Ordner: installiert'
+    Start-Process -FilePath (Join-Path $dir 'uninstall.exe') -ArgumentList '/S' -Wait
+    Wait-Gone $dir
+} else {
+    Note 'Laufwerk von subst: übersprungen, kein Laufwerksbuchstabe frei'
+}
 
 # Den Ordner darüber gibt es nicht: Das Setup legt keine Ordner dazwischen an, sie erbten die Rechte darüber.
 Test-Refused $missing 'Fehlender Ordner darüber'
