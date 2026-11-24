@@ -965,6 +965,28 @@ Function FindReparsePoint
   Pop $R1
 FunctionEnd
 
+!ifdef HALT_VOR_SCHUTZ
+; Nur in einer Testfassung der Installer-Tests (/DHALT_VOR_SCHUTZ=1): Das Setup legt neben sich die Datei „wartet“ an
+; und hält zwischen der Suche nach Verweisen und ProtectInstDir an, bis dort „weiter“ liegt, höchstens 60 s. So kann
+; der Test genau in diesem Moment einen Verweis anlegen (Issue 54).
+Function TestHalt
+  Push $0
+  Push $1
+  FileOpen $0 "$EXEDIR\wartet" w
+  FileClose $0
+  StrCpy $1 0
+  ${DoUntil} ${FileExists} "$EXEDIR\weiter"
+    ${If} $1 >= 300
+      ${Break}
+    ${EndIf}
+    Sleep 200
+    IntOp $1 $1 + 1
+  ${Loop}
+  Pop $1
+  Pop $0
+FunctionEnd
+!endif
+
 Function SecureInstDir
   Push $R0
   Push $R1
@@ -1005,6 +1027,9 @@ Function SecureInstDir
       Pop $R0
       Abort
     ${EndIf}
+!ifdef HALT_VOR_SCHUTZ
+    Call TestHalt
+!endif
     StrCpy $OrdnerUmgestellt 0
     StrCpy $R0 1                    ; ohne SID gilt es als gescheitert (CheckParentDirs hat dann schon abgebrochen)
     ${If} $R2 != ""
@@ -1012,6 +1037,21 @@ Function SecureInstDir
     ${EndIf}
     ${If} $R0 == 0
       StrCpy $OrdnerUmgestellt 1
+      ; Zwischen der Suche oben und ProtectInstDir konnte ein anderes Konto, das im Ordner schreiben durfte, noch einen
+      ; Verweis anlegen (Issue 54). Im Ordner selbst darf es das jetzt nicht mehr. Darum noch einmal suchen, bevor
+      ; icacls den Inhalt übernimmt: Bei einem Fund bleibt der Inhalt so, wie er war.
+      Call FindReparsePoint
+      ${If} $R0 != ""
+        StrCpy $Meldung "Im Installationsordner ist während der Installation ein Verweis auf einen anderen Ort (Junction oder symbolischer Link) oder etwas, das das Setup nicht lesen kann, entstanden:$\r$\n$R0$\r$\n$\r$\nBesitz und Rechte des Ordners selbst sind schon auf dich umgestellt, sein Inhalt noch nicht. Bitte einen leeren Ordner wählen oder einen im eigenen Benutzerprofil."
+        Call ShowRefusal
+        Pop $R4
+        Pop $R3
+        Pop $R2
+        Pop $R1
+        Pop $R0
+        Abort
+      ${EndIf}
+      StrCpy $R0 0
     ${EndIf}
     ; Was schon darin liegt, geht an den Benutzer: Ein fremder Besitzer dürfte die Rechte einer Datei sonst jederzeit
     ; neu setzen. Darf der Benutzer etwas nicht übernehmen, wird nicht installiert.

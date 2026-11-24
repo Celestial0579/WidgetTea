@@ -1198,6 +1198,56 @@ Check ((Get-Acl -LiteralPath $elsewhere).Sddl -eq $before) 'Besitz und Rechte de
 Remove-Junction $link
 Remove-Item -LiteralPath $target, $elsewhere -Recurse -Force -ErrorAction SilentlyContinue
 
+# Issue 54. Zwischen der Suche nach Verweisen und der Umstellung des Ordners bleibt ein Zeitfenster, in dem ein anderes
+# Konto, das im Ordner schreiben darf, noch eine Junction anlegen kann. Eine Testfassung hält genau dort an
+# (/DHALT_VOR_SCHUTZ=1), und der Test legt die Junction in diesem Moment an. Die zweite Suche nach der Umstellung des
+# Ordners muss sie finden, bevor icacls den Inhalt übernimmt.
+$haltDir = Join-Path $work 'haltepunkt'
+$setupHalt = Join-Path $haltDir 'WidgetTea-mit-Haltepunkt-setup.exe'
+Remove-Item -LiteralPath $haltDir -Recurse -Force -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Force $haltDir | Out-Null
+& $makensis /V2 /INPUTCHARSET UTF8 "/DVERSION=$version" "/DSRCDIR=$publishDir" "/DOUTFILE=$setupHalt" `
+    '/DHALT_VOR_SCHUTZ=1' (Join-Path $root 'installer\WidgetTea.nsi')
+if ($LASTEXITCODE) { throw 'makensis (Testfassung mit Haltepunkt) fehlgeschlagen' }
+$haltWaits = Join-Path $haltDir 'wartet'
+$haltGo = Join-Path $haltDir 'weiter'
+$jump = Join-Path $target 'sprung'
+# Feste Rechte mit Vollzugriff für den Benutzer: Mit eingeschränktem Token brach das Setup an einem einfach angelegten
+# Ordner unter C:\ schon vor der zweiten Suche ab (Lauf vom 24.11.2026). Geprüft wird hier nur die zweite Suche.
+New-ClosedDir $target
+New-Item -ItemType Directory -Force $elsewhere | Out-Null
+Set-Content -LiteralPath (Join-Path $target 'alt.txt') -Value 'lag schon da'
+Set-Content -LiteralPath (Join-Path $elsewhere 'fremd.txt') -Value 'gehört woanders hin'
+$sidType = [System.Security.Principal.SecurityIdentifier]
+$oldOwner = (Get-Acl -LiteralPath (Join-Path $target 'alt.txt')).GetOwner($sidType).Value
+$setupLog = Join-Path $env:TEMP 'WidgetTea-Setup.log'
+Remove-Item -LiteralPath $setupLog -Force -ErrorAction SilentlyContinue
+Write-Host "   >   $(Split-Path $setupHalt -Leaf) /S /D=$target"
+$p = Start-Process -FilePath $setupHalt -ArgumentList @('/S', "/D=$target") -PassThru
+$null = $p.Handle   # sonst ist ExitCode nach dem Ende leer
+$deadline = (Get-Date).AddSeconds(120)
+while (-not (Test-Path -LiteralPath $haltWaits) -and -not $p.HasExited -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 200 }
+Check (Test-Path -LiteralPath $haltWaits) 'Die Testfassung hält zwischen der Suche und der Umstellung an'
+New-Item -ItemType Junction -Path $jump -Target $elsewhere | Out-Null
+New-Item -ItemType File -Path $haltGo | Out-Null
+if (-not $p.WaitForExit(120000)) {
+    Stop-Process -Id $p.Id -Force
+    throw "[$script:stage] Die Testfassung lief nach 120 s noch"
+}
+Check ($p.ExitCode -eq 2) "Junction während der Installation: Exitcode 2 (war $($p.ExitCode))"
+Check (-not (Test-Path -LiteralPath (Join-Path $target 'WidgetTea.exe'))) 'Junction während der Installation: Es ist nichts installiert'
+Check (-not (Test-Path -LiteralPath (Join-Path $elsewhere 'WidgetTea.exe'))) 'Junction während der Installation: Im Ziel der Junction ist nichts installiert'
+$log = if (Test-Path -LiteralPath $setupLog) { Get-Content -LiteralPath $setupLog -Raw -Encoding Unicode } else { '' }
+if ($log -notlike "*während der Installation*$jump*") { Write-Host "   Setup-Protokoll: $(($log -replace '\s+', ' ').Trim())" }
+Check ($log -like "*während der Installation*$jump*") 'Junction während der Installation: Das Protokoll nennt den Grund und den Verweis'
+# Wie die Meldung sagt: Der Ordner selbst ist umgestellt, sein Inhalt noch nicht (icacls /setowner /T lief nicht).
+$acl = Get-Acl -LiteralPath $target
+Check ($acl.AreAccessRulesProtected -and $acl.GetOwner($sidType).Value -eq $me) 'Junction während der Installation: Der Ordner selbst ist umgestellt'
+$owner = (Get-Acl -LiteralPath (Join-Path $target 'alt.txt')).GetOwner($sidType).Value
+Check ($owner -eq $oldOwner) "Junction während der Installation: Der Inhalt ist nicht übernommen (Besitzer von alt.txt: $owner)"
+Remove-Junction $jump
+Remove-Item -LiteralPath $target, $elsewhere, $haltDir -Recurse -Force -ErrorAction SilentlyContinue
+
 # ---------------------------------------------------------------- 15c Ordner über dem Installationsordner
 
 Step '15c Ordner über dem Installationsordner: Abbruch, wenn ein anderes Konto ihn ändern darf'
@@ -1280,8 +1330,12 @@ $dir = Join-Path $inheritOnly 'WidgetTea'
 $r = Invoke-Setup $setup @('/S', "/D=$dir")
 Check ($r.ExitCode -eq 0) "Nur vererbter Eintrag am Ordner darüber: Exitcode 0 (war $($r.ExitCode))"
 Check (Test-Path -LiteralPath (Join-Path $dir 'WidgetTea.exe')) 'Nur vererbter Eintrag am Ordner darüber: installiert'
-$sids = Get-Sids $dir
-Check (-not ($sids | Where-Object { $_ -notin $allowed })) "Nur vererbter Eintrag am Ordner darüber: Am Installationsordner nur der Benutzer, SYSTEM und die Administratoren ($($sids -join ', '))"
+Check (Get-Acl -LiteralPath $dir).AreAccessRulesProtected 'Nur vererbter Eintrag am Ordner darüber: Der Installationsordner erbt nichts mehr'
+# Der Eintrag gilt für Ordner und Dateien darin ((OI)(CI)): auch an den Programmdateien darf nichts davon ankommen.
+foreach ($item in $dir, (Join-Path $dir 'WidgetTea.exe')) {
+    $sids = Get-Sids $item
+    Check (-not ($sids | Where-Object { $_ -notin $allowed })) "Nur vererbter Eintrag am Ordner darüber: $item nur für den Benutzer, SYSTEM und die Administratoren ($($sids -join ', '))"
+}
 Start-Process -FilePath (Join-Path $dir 'uninstall.exe') -ArgumentList '/S' -Wait
 Wait-Gone $dir
 
