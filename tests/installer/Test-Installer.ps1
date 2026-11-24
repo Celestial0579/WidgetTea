@@ -1326,8 +1326,12 @@ $dir = Join-Path $inheritOnly 'WidgetTea'
 $r = Invoke-Setup $setup @('/S', "/D=$dir")
 Check ($r.ExitCode -eq 0) "Nur vererbter Eintrag am Ordner darüber: Exitcode 0 (war $($r.ExitCode))"
 Check (Test-Path -LiteralPath (Join-Path $dir 'WidgetTea.exe')) 'Nur vererbter Eintrag am Ordner darüber: installiert'
-$sids = Get-Sids $dir
-Check (-not ($sids | Where-Object { $_ -notin $allowed })) "Nur vererbter Eintrag am Ordner darüber: Am Installationsordner nur der Benutzer, SYSTEM und die Administratoren ($($sids -join ', '))"
+Check (Get-Acl -LiteralPath $dir).AreAccessRulesProtected 'Nur vererbter Eintrag am Ordner darüber: Der Installationsordner erbt nichts mehr'
+# Der Eintrag gilt für Ordner und Dateien darin ((OI)(CI)): auch an den Programmdateien darf nichts davon ankommen.
+foreach ($item in $dir, (Join-Path $dir 'WidgetTea.exe')) {
+    $sids = Get-Sids $item
+    Check (-not ($sids | Where-Object { $_ -notin $allowed })) "Nur vererbter Eintrag am Ordner darüber: $item nur für den Benutzer, SYSTEM und die Administratoren ($($sids -join ', '))"
+}
 Start-Process -FilePath (Join-Path $dir 'uninstall.exe') -ArgumentList '/S' -Wait
 Wait-Gone $dir
 
